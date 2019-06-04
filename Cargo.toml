@@ -1,0 +1,12 @@
+[package]
+name = "rust-crypto-test"
+version = "0.1.0"
+authors = ["Alexander Shtuchkin <ashtuchkin@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+sodiumoxide = "0.2.*"
+structopt = "0.2.*"
+failure = "0.1.*"
+term = "0.5.*"
+humansize = "1.1.*"
