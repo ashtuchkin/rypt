@@ -1,29 +1,31 @@
 use std::io::{Read, Write, ErrorKind, stdin, stdout};
 use std::path::PathBuf;
-use std::fs::File;
+use std::fs::{File, metadata};
 use std::thread;
 use std::time::{Duration, Instant};
 use std::collections::VecDeque;
 
 use structopt::StructOpt;
-use sodiumoxide::crypto::secretstream::{Stream, Header, Tag, Key, HEADERBYTES, KEYBYTES, ABYTES};
 use sodiumoxide::crypto::pwhash;
 use failure::{Fail, Error};
 use humansize::{FileSize, file_size_opts::CONVENTIONAL as ConventionalSize};
-use crossbeam_channel::{Sender, Receiver, unbounded as unbounded_channel, RecvTimeoutError};
+use crossbeam_channel::{Sender, Receiver, unbounded as unbounded_channel, tick};
 use libsodium_sys::{
-//    crypto_secretstream_xchacha20poly1305_ABYTES as ABYTES,
-//    crypto_secretstream_xchacha20poly1305_KEYBYTES as KEYBYTES,
-//    crypto_secretstream_xchacha20poly1305_HEADERBYTES as HEADERBYTES,
+    crypto_secretstream_xchacha20poly1305_state as StreamState,
     crypto_secretstream_xchacha20poly1305_init_push as init_push,
     crypto_secretstream_xchacha20poly1305_push as stream_push,
-    crypto_secretstream_xchacha20poly1305_TAG_MESSAGE as TAG_MESSAGE,
-    crypto_secretstream_xchacha20poly1305_TAG_FINAL as TAG_FINAL,
-    crypto_secretstream_xchacha20poly1305_state as StreamState,
+    crypto_secretstream_xchacha20poly1305_init_pull as init_pull,
+    crypto_secretstream_xchacha20poly1305_pull as stream_pull,
 };
 use std::os::raw::c_ulonglong;
 
-const BUF_SIZE: usize = 1 * 1024 * 1024;
+const ABYTES: usize = libsodium_sys::crypto_secretstream_xchacha20poly1305_ABYTES as usize;
+const KEYBYTES: usize = libsodium_sys::crypto_secretstream_xchacha20poly1305_KEYBYTES as usize;
+const HEADERBYTES: usize = libsodium_sys::crypto_secretstream_xchacha20poly1305_HEADERBYTES as usize;
+const TAG_MESSAGE: u8 = libsodium_sys::crypto_secretstream_xchacha20poly1305_TAG_MESSAGE as u8;
+const TAG_FINAL: u8 = libsodium_sys::crypto_secretstream_xchacha20poly1305_TAG_FINAL as u8;
+
+const CHUNK_SIZE: usize = 1 * 1024 * 1024;
 
 #[derive(Fail, Debug)]
 enum MyError {
@@ -33,150 +35,150 @@ enum MyError {
     #[fail(display = "Password required")]
     PasswordRequired,
 
-    #[fail(display = "Encryption Error")]
-    EncryptionError(()),
-
     #[fail(display = "Decryption Error")]
-    DecryptionError(()),
+    DecryptionError,
+
+    #[fail(display = "Invalid header")]
+    InvalidHeader,
 
     #[fail(display = "Thread Join Error")]
     ThreadJoinError,
 }
 
-// * Fill up the buffer up to buf_size and pass it to the callback (except the last chunk)
-// * Always keep `last_piece_size` bytes at the end and return it after the end of iteration
-// * Retry ErrorKind::Interrupted.
-fn read_chunks(input_stream: &mut Read, buf_size: usize, last_piece_size: usize,
-                 mut cb: impl FnMut(&[u8]) -> Result<(), Error>) -> Result<Vec<u8>, Error> {
-    let total_buf_size = buf_size + last_piece_size + 1;
-    let mut buffer = vec![0u8; total_buf_size];
-    let mut read_ptr = 0usize;
-
-    loop {
-        while read_ptr < total_buf_size {
-            match input_stream.read(&mut buffer[read_ptr..]) {
-                Ok(read_bytes) => {
-                    if read_bytes > 0 {
-                        // Continue reading into the buffer, adjusting the slices.
-                        read_ptr += read_bytes;
-
-                    } else {
-                        // Reached end of file. Extract the last piece
-                        if read_ptr < last_piece_size {
-                            return Err(std::io::Error::from(ErrorKind::UnexpectedEof).into());
-                        } else if read_ptr > last_piece_size {
-                            cb(&buffer[..read_ptr-last_piece_size])?;
-                        }
-                        let last_piece = &buffer[read_ptr-last_piece_size..read_ptr];
-                        assert_eq!(last_piece.len(), last_piece_size);
-                        return Ok(last_piece.to_vec())
-                    }
-                },
-                Err(e) => {
-                    if e.kind() != ErrorKind::Interrupted {
-                        return Err(e.into());
-                    }
-                    // Retry when interrupted
-                },
-            }
-        }
-
-        // Stream has more data; process this chunk and continue
-        cb(&buffer[..buf_size])?;
-
-        // Move bytes from the last piece to the beginning and reset reading_space.
-        let (main_buf, last_piece) = buffer.split_at_mut(buf_size);
-        main_buf[..last_piece_size+1].copy_from_slice(last_piece);
-        read_ptr = last_piece_size+1;
-    }
+#[derive(Debug)]
+struct Chunk {
+    pub buffer: Vec<u8>,
+    pub reserved_prefix_size: usize,
+    pub last_chunk: bool,
 }
 
-fn start_encode_thread(input: Receiver<Vec<u8>>, output: Sender<Vec<u8>>, key: Key) -> thread::JoinHandle<Result<(), Error>> {
+fn start_encode_thread(input: Receiver<Chunk>, output: Sender<Chunk>, key: Vec<u8>) -> thread::JoinHandle<Result<(), Error>> {
     thread::spawn(move || -> Result<(), Error> {
+        assert_eq!(key.len(), KEYBYTES);
         let mut header = vec![0u8; HEADERBYTES];
-        let mut state: StreamState = unsafe { std::mem::uninitialized() };
-        let rc = unsafe {
-            init_push(&mut state, header.as_mut_ptr(), key.0.as_ptr())
+        let mut state: StreamState = unsafe {
+            let mut state: StreamState = std::mem::zeroed();
+            init_push(&mut state, header.as_mut_ptr(), key.as_ptr()); // NOTE: init_push always succeeds.
+            state
         };
-        if rc != 0 {
-            return Err(MyError::EncryptionError(()).into());
-        }
+        output.send(Chunk{buffer: header, reserved_prefix_size: 0, last_chunk: false})?;
 
-        output.send(header)?;
+        for mut chunk in input {
+            const PREFIX_SIZE: usize = 1;
+            const SUFFIX_SIZE: usize = ABYTES - PREFIX_SIZE;
+            assert!(chunk.reserved_prefix_size >= PREFIX_SIZE);
 
-        for mut plaintext in input {
-            let plaintext_len = plaintext.len();
-            let ciphertext_len = plaintext_len + ABYTES;
-            plaintext.resize(ciphertext_len, 0);
+            let plaintext_len = chunk.buffer.len() - chunk.reserved_prefix_size;
+            chunk.buffer.resize(chunk.buffer.len() + SUFFIX_SIZE, 0);
+            let tag = if chunk.last_chunk {TAG_FINAL} else {TAG_MESSAGE} as u8;
 
-            let rc = unsafe {
+            unsafe {
+                // NOTE: `stream_push` always succeeds.
+                // NOTE: The buffer is encoded in-place. This is only possible due to the pointer shift
+                // made by PREFIX_SIZE. (see function's internals at https://github.com/jedisct1/libsodium/blob/1.0.18/src/libsodium/crypto_secretstream/xchacha20poly1305/secretstream_xchacha20poly1305.c#L147
+                // and the fact that crypto_stream_chacha20_ietf_xor_ic can do encryption in-place: https://libsodium.gitbook.io/doc/advanced/stream_ciphers/xchacha20#usage)
                 stream_push(
                     &mut state,
-                    plaintext.as_mut_ptr(),
-                    &mut (ciphertext_len as c_ulonglong),
-                    plaintext.as_ptr(),
+                    chunk.buffer.as_mut_ptr().offset((chunk.reserved_prefix_size - PREFIX_SIZE) as isize),
+                    std::ptr::null_mut(),
+                    chunk.buffer.as_ptr().offset(chunk.reserved_prefix_size as isize),
                     plaintext_len as c_ulonglong,
                     std::ptr::null(),
                     0 as c_ulonglong,
-                    TAG_MESSAGE as u8,
-                )
-            };
-            if rc != 0 {
-                return Err(MyError::EncryptionError(()).into());
+                    tag,
+                );
             }
-            let ciphertext = plaintext;
-
-//            let ciphertext = enc_stream.push(&plaintext, None, Tag::Message)
-//                .map_err()?;
-            //assert!(ciphertext.len() == plaintext.len() + ABYTES);  // ABYTES = 17
-            output.send(ciphertext)?;
+            chunk.reserved_prefix_size -= PREFIX_SIZE;
+            output.send(chunk)?;
         }
-
-        let ciphertext_len = ABYTES;
-        let mut ciphertext = vec![0u8; ABYTES];
-        let rc = unsafe {
-            stream_push(
-                &mut state,
-                ciphertext.as_mut_ptr(),
-                &mut (ciphertext_len as c_ulonglong),
-                ciphertext.as_ptr(),
-                0 as c_ulonglong,
-                std::ptr::null(),
-                0 as c_ulonglong,
-                TAG_FINAL as u8,
-            )
-        };
-        if rc != 0 {
-            return Err(MyError::EncryptionError(()).into());
-        }
-
-
-//        let ciphertext = enc_stream.finalize(None)
-//            .map_err(MyError::EncryptionError)?;
-        output.send(ciphertext)?;
         Ok(())
     })
 }
 
-fn start_read_thread(input_path: PathBuf, input: Receiver<Vec<u8>>, output: Sender<Vec<u8>>,
-                     chunk_size: usize, last_piece_size: usize) -> thread::JoinHandle<Result<(), Error>> {
+fn start_decode_thread(input: Receiver<Chunk>, output: Sender<Chunk>, key: Vec<u8>) -> thread::JoinHandle<Result<(), Error>> {
     thread::spawn(move || -> Result<(), Error> {
-        let stdin = stdin();
-        let mut input_stream: Box<Read> = match input_path.to_str() {
-            Some("-") => Box::new(stdin.lock()),
-            _ => Box::new(File::open(input_path)?),
+        assert_eq!(key.len(), KEYBYTES);
+
+        // 1. Receive the header.
+        let header = input.recv()?;
+        assert_eq!(header.buffer.len(), HEADERBYTES);
+        assert_eq!(header.reserved_prefix_size, 0);
+
+        // 2. Initialize the stream state.
+        let mut state: StreamState = unsafe {
+            let mut state: StreamState = std::mem::zeroed();
+            let rc = init_pull(&mut state, header.buffer.as_ptr(), key.as_ptr());
+            if rc != 0 {
+                return Err(MyError::InvalidHeader.into());
+            }
+            state
         };
 
-        let total_buf_size = chunk_size + last_piece_size + 1;
-        let mut last_piece: Option<Vec<u8>> = None;
+        for mut chunk in input {
+            const PREFIX_SIZE: usize = 1;
+            const SUFFIX_SIZE: usize = ABYTES - PREFIX_SIZE;
+            let chunk_size = chunk.buffer.len() - chunk.reserved_prefix_size;
+            if chunk_size < ABYTES {
+                return Err(MyError::DecryptionError.into());  // Chunk too small to be valid.
+            }
+            let mut tag: u8 = unsafe { std::mem::zeroed() };
+
+            let rc = unsafe {
+                // NOTE: The buffer is decoded in-place. This is only possible due to the pointer shift
+                // made by PREFIX_SIZE. (see function's internals at https://github.com/jedisct1/libsodium/blob/1.0.18/src/libsodium/crypto_secretstream/xchacha20poly1305/secretstream_xchacha20poly1305.c#L147
+                // and the fact that crypto_stream_chacha20_ietf_xor_ic can do encryption in-place: https://libsodium.gitbook.io/doc/advanced/stream_ciphers/xchacha20#usage)
+                stream_pull(
+                    &mut state,
+                    chunk.buffer.as_mut_ptr().offset((chunk.reserved_prefix_size + PREFIX_SIZE) as isize),
+                    std::ptr::null_mut(),
+                    &mut tag,
+                    chunk.buffer.as_ptr().offset(chunk.reserved_prefix_size as isize),
+                    chunk_size as c_ulonglong,
+                    std::ptr::null(),
+                    0 as c_ulonglong,
+                )
+            };
+            if rc != 0 {
+                return Err(MyError::DecryptionError.into());  // Invalid chunk.
+            }
+            if (tag == TAG_FINAL) != chunk.last_chunk {
+                return Err(MyError::DecryptionError.into());  // Final chunk is not the last chunk.
+            }
+
+            chunk.buffer.truncate(chunk.buffer.len() - SUFFIX_SIZE);
+            chunk.reserved_prefix_size += PREFIX_SIZE;
+            output.send(chunk)?;
+        }
+        Ok(())
+    })
+}
+
+fn start_read_thread(input_path: PathBuf, input: Receiver<Vec<u8>>, output: Sender<Chunk>,
+                     chunk_size: usize, reserved_prefix_size: usize, header_size: Option<usize>)
+                        -> Result<(thread::JoinHandle<Result<(), Error>>, Option<u64>), Error> {
+    let stdin = stdin();
+    let (mut input_stream, filesize): (Box<Read + Send>, Option<u64>) = match input_path.to_str() {
+        Some("-") => (Box::new(stdin), None),
+        _ => (Box::new(File::open(&input_path)?), Some(metadata(&input_path)?.len())),
+    };
+
+    let handle = thread::spawn(move || -> Result<(), Error> {
+        if let Some(header_size) = header_size {
+            let mut header_buf = vec![0u8; header_size];
+            input_stream.read_exact(header_buf.as_mut_slice())?;
+            output.send(Chunk {buffer: header_buf, reserved_prefix_size: 0, last_chunk: false})?;
+        }
+
+        let total_buf_size = reserved_prefix_size + chunk_size + 1;
+        let mut last_byte = None;
 
         for mut buffer in input {
             buffer.resize(total_buf_size, 0);
-            let mut read_ptr = if let Some(ref last_piece) = last_piece {
-                buffer[..last_piece_size+1].copy_from_slice(&last_piece);
-                last_piece_size+1
+            let mut read_ptr = if let Some(last_byte) = last_byte {
+                buffer[reserved_prefix_size] = last_byte;
+                reserved_prefix_size + 1
             } else {
-                0usize
+                reserved_prefix_size
             };
 
             while read_ptr < total_buf_size {
@@ -187,25 +189,10 @@ fn start_read_thread(input_path: PathBuf, input: Receiver<Vec<u8>>, output: Send
                             read_ptr += read_bytes;
 
                         } else {
-                            // Reached end of file. Extract the last piece
-                            if read_ptr < last_piece_size {
-                                return Err(std::io::Error::from(ErrorKind::UnexpectedEof).into());
-                            } else {
-                                let mut last_piece = match last_piece.take() {
-                                    Some(mut piece) => { piece.truncate(last_piece_size); piece },
-                                    None => vec![0u8; last_piece_size],
-                                };
-                                last_piece.copy_from_slice(&buffer[read_ptr-last_piece_size..read_ptr]);
-
-                                buffer.truncate(read_ptr-last_piece_size);
-                                if !buffer.is_empty() {
-                                    output.send(buffer)?;
-                                }
-                                if !last_piece.is_empty() {
-                                    output.send(last_piece)?;
-                                }
-                                return Ok(());
-                            }
+                            // Reached end of file. Send the last chunk.
+                            buffer.truncate(read_ptr);
+                            output.send(Chunk {buffer, reserved_prefix_size, last_chunk: true})?;
+                            return Ok(());
                         }
                     },
                     Err(e) => {
@@ -218,17 +205,18 @@ fn start_read_thread(input_path: PathBuf, input: Receiver<Vec<u8>>, output: Send
             }
 
             // Stream has more data; keep last piece and send remaining data
-            last_piece.get_or_insert_with(|| vec![0u8; last_piece_size+1])
-                .copy_from_slice(&buffer[chunk_size..]);
+            last_byte = Some(*buffer.last().unwrap());
 
-            buffer.truncate(chunk_size);
-            output.send(buffer)?;
+            buffer.truncate(reserved_prefix_size + chunk_size);
+            output.send(Chunk {buffer, reserved_prefix_size, last_chunk: false})?;
         }
         Err(std::io::Error::from(ErrorKind::NotConnected).into())
-    })
+    });
+
+    Ok((handle, filesize))
 }
 
-fn start_write_thread(output_path: PathBuf, input: Receiver<Vec<u8>>, output: Sender<Vec<u8>>) -> thread::JoinHandle<Result<(), Error>> {
+fn start_write_thread(output_path: PathBuf, input: Receiver<Chunk>, output: Sender<Vec<u8>>) -> thread::JoinHandle<Result<(), Error>> {
     thread::spawn(move || -> Result<(), Error> {
         let stdout = stdout();
         let mut output_stream: Box<Write> = match output_path.to_str() {
@@ -236,152 +224,88 @@ fn start_write_thread(output_path: PathBuf, input: Receiver<Vec<u8>>, output: Se
             _ => Box::new(File::create(output_path)?),
         };
 
-        for buffer in input {
-            output_stream.write_all(&buffer)?;
-            output.send(buffer)?;
+        for chunk in input {
+            output_stream.write_all(&chunk.buffer[chunk.reserved_prefix_size..])?;
+            if chunk.last_chunk {
+                output_stream.flush()?;
+            }
+            output.send(chunk.buffer)?;
         }
         Ok(())
     })
 }
 
-/*
-fn encode_stream(input_stream: &mut Read, output_stream: &mut Write, key: &Key, mut progress_cb: Box<FnMut(usize)->()>) -> Result<(), Error> {
-    let (mut enc_stream, header) = Stream::init_push(&key)
-        .map_err(MyError::EncryptionError)?;
-
-    assert!(header.as_ref().len() == HEADERBYTES);
-    output_stream.write_all(header.as_ref())?;
-
-    read_chunks(input_stream, BUF_SIZE, 0,|plaintext| {
-        let ciphertext = enc_stream.push(plaintext, None, Tag::Message)
-            .map_err(MyError::EncryptionError)?;
-        assert!(ciphertext.len() == plaintext.len() + ABYTES);  // ABYTES = 17
-        output_stream.write_all(&ciphertext)?;
-        progress_cb(ciphertext.len());
-        Ok(())
-    })?;
-
-    let ciphertext = enc_stream.finalize(None)
-        .map_err(MyError::EncryptionError)?;
-    output_stream.write_all(&ciphertext)?;
-    progress_cb(ciphertext.len());
-
-    output_stream.flush()?;
-
-    Ok(())
-}
-*/
-fn decode_stream(input_stream: &mut Read, output_stream: &mut Write, key: &Key, mut progress_cb: Box<FnMut(usize)->()>) -> Result<(), Error> {
-    let header_buf = &mut [0u8; HEADERBYTES];  // HEADERBYTES = 24.
-    input_stream.read_exact(header_buf)?;
-    let header = Header::from_slice(header_buf).unwrap();
-
-    let mut dec_stream = Stream::init_pull(&header, &key)
-        .map_err(MyError::DecryptionError)?;
-
-    let last_piece = read_chunks(input_stream, BUF_SIZE + ABYTES, ABYTES, |ciphertext| {
-        let (plaintext, _tag) = dec_stream.pull(ciphertext, None)
-            .map_err(MyError::DecryptionError)?;
-        assert!(ciphertext.len() == plaintext.len() + ABYTES);
-        output_stream.write_all(&plaintext)?;
-        progress_cb(plaintext.len());
-        Ok(())
-    })?;
-
-    let (plaintext, tag) = dec_stream.pull(&last_piece, None)
-        .map_err(MyError::DecryptionError)?;
-    assert!(plaintext.len() == 0 && tag == Tag::Final);
-    assert!(dec_stream.is_finalized());
-
-    output_stream.flush()?;
-
-    Ok(())
-}
-
-fn derive_key_from_password(password: &str) -> Key {
+fn derive_key_from_password(password: &str) -> Vec<u8> {
     let key = &mut [0u8; KEYBYTES];  // KEYBYTES = 32
     let salt =   // NOTE: We use static salt.
         "rust-crypto-test-salt".bytes().cycle().take(pwhash::SALTBYTES).collect::<Vec<u8>>();
     let salt = pwhash::Salt::from_slice(&salt).unwrap();
     pwhash::derive_key_interactive(key, password.as_bytes(), &salt).unwrap();
 
-    Key::from_slice(key).unwrap()
-}
-
-fn open_streams(input: PathBuf, output: PathBuf) -> Result<(Box<Read>, Box<Write>), std::io::Error> {
-    let input_stream: Box<Read> = match input.to_str() {
-        Some("-") => Box::new(stdin()),
-        _ => Box::new(File::open(input)?),
-    };
-
-    let output_stream: Box<Write> = match output.to_str() {
-        Some("-") => Box::new(stdout()),
-        _ => Box::new(File::create(output)?),
-    };
-
-    Ok((input_stream, output_stream))
+    key.to_vec()
 }
 
 fn start_progress_thread() -> (Sender<usize>, thread::JoinHandle<()>) {
     let (sender, receiver) = unbounded_channel();
+    const PRINT_PERIOD: Duration = Duration::from_millis(100);
+    const SPEED_CALC_PERIOD: Duration = Duration::from_secs(10);  // Calculate speed over the last 5 seconds
+    const KEEP_STAMPS_COUNT: usize = (SPEED_CALC_PERIOD.as_millis() / PRINT_PERIOD.as_millis()) as usize;
+    let print_ticker = tick(PRINT_PERIOD);
+    let start_time = Instant::now();
+    let mut cur_progress = 0usize;
+    let mut cur_progress_time = Instant::now();
+    let mut term = term::stderr().unwrap();
+    let mut stamps = VecDeque::new();
+    stamps.push_back((cur_progress_time, cur_progress));
+    let mut has_ever_printed = false;
+
+    fn human_readable_duration(dur: Duration) -> String {
+        let secs_f64 = dur.as_millis() as f64 / 1000f64;
+        format!("{:.1}s", secs_f64)
+    }
+
+    let mut print_progress = move |stamps: &VecDeque<(Instant, usize)>, final_print: bool| {
+        let (end_period_time, end_period_progress) = *stamps.back().unwrap();
+        let (start_period_time, start_period_progress) = *stamps.front().unwrap();
+        let delta_time = (end_period_time - start_period_time).as_millis() as usize;
+        let delta_progress = end_period_progress - start_period_progress;
+        if delta_time > 0 && delta_progress > 0 {
+            let speed = delta_progress * 1000 / delta_time;
+            term.carriage_return().ok();
+            term.delete_line().ok();
+            write!(
+                term, "Progress: {}, Speed: {}/s, Time: {}",
+                end_period_progress.file_size(ConventionalSize).unwrap(),
+                speed.file_size(ConventionalSize).unwrap(),
+                human_readable_duration(Instant::now() - start_time),
+            ).ok();
+            if final_print && has_ever_printed {
+                writeln!(term).ok();
+            }
+            has_ever_printed = true;
+        }
+    };
 
     let join_handle = thread::spawn(move || {
-        const PRINT_PERIOD: Duration = Duration::from_millis(500);
-        const ADD_STAMP_PERIOD: Duration = Duration::from_millis(250);
-        const KEEP_STAMPS: usize = 40;  // average over 10 seconds
-
-        let mut cur_progress = 0usize;
-        let mut term = term::stderr().unwrap();
-        let mut has_ever_printed = false;
-        let now = Instant::now();
-        let mut last_printed_time = now;
-        let mut last_added_time = now;
-        let mut stamps = VecDeque::new();
-        stamps.push_front((now, cur_progress));
-
         loop {
-            let passed_time = Instant::now() - last_printed_time;
-            let timeout = if PRINT_PERIOD > passed_time  {
-                PRINT_PERIOD - passed_time
-            } else {
-                Duration::from_millis(0)
-            };
-            match receiver.recv_timeout(timeout) {
-                Ok(increment_size) => {
-                    cur_progress += increment_size;
-                    let now = Instant::now();
-                    while now > last_added_time + ADD_STAMP_PERIOD {
-                        stamps.push_back((now, cur_progress));
-                        last_added_time += ADD_STAMP_PERIOD;
+            crossbeam_channel::select! {
+                recv(receiver) -> res => match res {
+                    Ok(increment_size) => {
+                        cur_progress += increment_size;
+                        cur_progress_time = std::cmp::max(cur_progress_time, Instant::now());
+                    },
+                    Err(_) => {  // Disconnected - finish printing and exit.
+                        print_progress(&stamps, true);
+                        break;
                     }
-                    while stamps.len() > KEEP_STAMPS {
+                },
+                recv(print_ticker) -> _ => {
+                    stamps.push_back((cur_progress_time, cur_progress));
+                    if stamps.len() > KEEP_STAMPS_COUNT {
                         stamps.pop_front();
                     }
-                },
-                Err(RecvTimeoutError::Timeout) => {
-                    // Print current values.
-                    term.carriage_return().ok();
-                    term.delete_line().ok();
-                    let (start_time, start_progress) = stamps.front().unwrap();
-                    let (end_time, end_progress) = stamps.back().unwrap();
-                    let delta_time = (*end_time - *start_time).as_millis() as usize;
-                    let delta_progress = end_progress - start_progress;
-                    if delta_time > 0 && delta_progress > 0 {
-                        let speed = delta_progress * 1000 / delta_time;
-                        write!(
-                            term, "Progress: {}, Speed: {}/s",
-                            end_progress.file_size(ConventionalSize).unwrap(),
-                            speed.file_size(ConventionalSize).unwrap(),
-                        ).ok();
-                        has_ever_printed = true;
-                    }
-                    last_printed_time += PRINT_PERIOD;
-                },
-                Err(RecvTimeoutError::Disconnected) => {
-                    if has_ever_printed {
-                        writeln!(term).ok();
-                    }
-                    break;
+
+                    print_progress(&stamps, false);
                 },
             }
         }
@@ -393,9 +317,6 @@ fn start_progress_thread() -> (Sender<usize>, thread::JoinHandle<()>) {
 #[derive(Debug, StructOpt)]
 // #[structopt(name = "sodium-codec", about = "A command line utility to do encryption/decryption.")]
 enum Opt {
-//    /// Activate debug mode
-//    #[structopt(short = "d", long = "debug")]
-//    debug: bool,
 //    /// Set speed
 //    #[structopt(short = "s", long = "speed", default_value = "42")]
 //    speed: f64,
@@ -442,11 +363,13 @@ fn to_hex_string(bytes: impl AsRef<[u8]>) -> String {
 fn main() -> Result<(), Error> {
     sodiumoxide::init().map_err(MyError::InitError)?;
     let opt = Opt::from_args();
-    let (progress_sender, progress_thread) = start_progress_thread();
 
-    match opt {
-        Opt::Encrypt {input, output, password} => {
-            let key: Key = if let Some(password) = password {
+    match &opt {
+        Opt::Encrypt {input, output, password} |
+        Opt::Decrypt {input, output, password} => {
+            let (progress_sender, progress_thread) = start_progress_thread();
+
+            let key: Vec<u8> = if let Some(password) = password {
                 derive_key_from_password(password.as_str())
             } else {
                 return Err(MyError::PasswordRequired.into());
@@ -454,51 +377,48 @@ fn main() -> Result<(), Error> {
 
             // Channels
             let (initial_sender, read_receiver) = unbounded_channel();
-            let (read_sender, encode_receiver) = unbounded_channel();
-            let (encode_sender, write_receiver) = unbounded_channel();
-            let (write_sender, initial_receiver) = unbounded_channel();
+            let (read_sender, codec_receiver) = unbounded_channel();
+            let (encodec_sender, write_receiver) = unbounded_channel();
+            let (write_sender, final_receiver) = unbounded_channel();
+
+            const PREFIX_SIZE: usize = 16;  // Must be >= 1; we use 16 for better alignment.
+            const SUFFIX_SIZE: usize = 16;  // Must be >= 16
+            const BUF_CAPACITY: usize = PREFIX_SIZE + CHUNK_SIZE + SUFFIX_SIZE + 1;  // +1 byte to allow reader to check Eof
 
             // Threads
-            let read_thread = start_read_thread(
-                input, read_receiver, read_sender, BUF_SIZE, 0
-            );
-            let encode_thread = start_encode_thread(encode_receiver, encode_sender, key);
-            let write_thread = start_write_thread(output,write_receiver, write_sender);
+            let (chunk_size, prefix_size, header_size) = match &opt {
+                Opt::Encrypt{..} => (CHUNK_SIZE, PREFIX_SIZE, None),
+                Opt::Decrypt{..} => (CHUNK_SIZE + SUFFIX_SIZE + 1, PREFIX_SIZE - 1, Some(HEADERBYTES)),
+            };
+            let (read_thread, _file_size) = start_read_thread(
+                input.clone(), read_receiver, read_sender, chunk_size, prefix_size, header_size
+            )?;
+            let codec_thread = match &opt {
+                Opt::Encrypt{..} => start_encode_thread(codec_receiver, encodec_sender, key),
+                Opt::Decrypt{..} => start_decode_thread(codec_receiver, encodec_sender, key),
+            };
+            let write_thread = start_write_thread(output.clone(),write_receiver, write_sender);
 
             // Send initial buffers in to start the pipeline.
             for _ in 0..5 {
-                initial_sender.send(Vec::with_capacity(BUF_SIZE + ABYTES))?;
+                initial_sender.send(Vec::with_capacity(BUF_CAPACITY))?;
             }
 
-            // Wait while pipeline works, resupplying buffers.
-            for buf in initial_receiver {
+            // Wait while pipeline works, resupplying used buffers back to the reader.
+            for buf in final_receiver {
                 progress_sender.send(buf.len())?;
-                if buf.capacity() >= BUF_SIZE + ABYTES {
-                    initial_sender.send(buf)?;
+                if buf.capacity() == BUF_CAPACITY {
+                    initial_sender.send(buf).ok();  // Ok to drop vectors when reading has stopped.
                 }
             }
-            std::mem::drop(initial_sender);
+            std::mem::drop(progress_sender);
 
+            progress_thread.join().map_err(|_| MyError::ThreadJoinError)?;
             read_thread.join().map_err(|_| MyError::ThreadJoinError)??;
-            encode_thread.join().map_err(|_| MyError::ThreadJoinError)??;
+            codec_thread.join().map_err(|_| MyError::ThreadJoinError)??;
             write_thread.join().map_err(|_| MyError::ThreadJoinError)??;
         },
-        Opt::Decrypt {input, output, password} => {
-            let (mut input_stream, mut output_stream) = open_streams(input, output)?;
-
-            let key: Key = if let Some(password) = password {
-                derive_key_from_password(password.as_str())
-            } else {
-                return Err(MyError::PasswordRequired.into());
-            };
-
-            decode_stream(&mut input_stream, &mut output_stream, &key, Box::new(move |inc_progress| {
-                progress_sender.send(inc_progress).unwrap();
-            }))?;
-        },
     }
-
-    progress_thread.join().unwrap();  // NOTE: Ensure progress_sender is dropped before this.
 
     Ok(())
 }
