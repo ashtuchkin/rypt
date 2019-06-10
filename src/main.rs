@@ -1,45 +1,29 @@
 use std::io::{Read, Write, ErrorKind, stdin, stdout};
-use std::path::PathBuf;
-use std::fs::{File, metadata};
+use std::path::{PathBuf, Path};
+use std::fs::File;
 use std::thread;
 use std::time::{Duration, Instant};
 use std::collections::VecDeque;
 
 use structopt::StructOpt;
-use sodiumoxide::crypto::pwhash;
 use failure::{Error};
 use humansize::{FileSize, file_size_opts::CONVENTIONAL as ConventionalSize};
 use crossbeam_channel::{Sender, Receiver, unbounded as unbounded_channel, tick};
-use crate::codec::{MyError, Chunk, StreamCodec, ChunkConfig};
-use crate::xchacha20::XChaCha20;
-use crate::aes256_gcm::Aes256Gcm;
+use crate::types::{Chunk, ChunkConfig, StreamConverter};
+use crate::errors::MyError;
+use crate::header::FileHeader;
 
-mod codec;
-mod xchacha20;
-mod aes256_gcm;
+mod types;
+mod encoding;
+mod header;
+mod key_derivation;
+mod errors;
+mod registry;
+mod util;
 
-const CHUNK_SIZE: usize = 1 * 1024 * 1024;
-
-fn start_read_thread(input_path: PathBuf, input: Receiver<Chunk>, output: Sender<Chunk>, header_size: Option<usize>)
-                        -> Result<(thread::JoinHandle<Result<(), Error>>, Option<u64>), Error> {
-    let filesize = match input_path.to_str() {
-        Some("-") => None,
-        _ => Some(metadata(&input_path)?.len()),
-    };
-
-    let handle = thread::spawn(move || -> Result<(), Error> {
-        let stdin = stdin();
-        let mut input_stream: Box<Read> = match input_path.to_str() {
-            Some("-") => Box::new(stdin.lock()),
-            _ => Box::new(File::open(&input_path)?),
-        };
-
-        if let Some(header_size) = header_size {
-            let mut header_buf = vec![0u8; header_size];
-            input_stream.read_exact(header_buf.as_mut_slice())?;
-            output.send(Chunk {buffer: header_buf, offset: 0, is_last_chunk: false})?;
-        }
-
+fn start_read_thread(mut input_stream: Box<Read + Send>, input: Receiver<Chunk>, output: Sender<Chunk>)
+                        -> thread::JoinHandle<Result<(), Error>> {
+    thread::spawn(move || -> Result<(), Error> {
         let mut last_byte = None;
         for mut chunk in input {
             chunk.buffer.push(0); // Add one byte to allow determining final chunk.
@@ -80,19 +64,11 @@ fn start_read_thread(input_path: PathBuf, input: Receiver<Chunk>, output: Sender
             output.send(chunk)?;
         }
         Err(std::io::Error::from(ErrorKind::NotConnected).into())
-    });
-
-    Ok((handle, filesize))
+    })
 }
 
-fn start_write_thread(output_path: PathBuf, input: Receiver<Chunk>, output: Sender<Chunk>) -> thread::JoinHandle<Result<(), Error>> {
+fn start_write_thread(mut output_stream: Box<Write+Send>, input: Receiver<Chunk>, output: Sender<Chunk>) -> thread::JoinHandle<Result<(), Error>> {
     thread::spawn(move || -> Result<(), Error> {
-        let stdout = stdout();
-        let mut output_stream: Box<Write> = match output_path.to_str() {
-            Some("-") => Box::new(stdout.lock()),
-            _ => Box::new(File::create(output_path)?),
-        };
-
         for chunk in input {
             output_stream.write_all(&chunk.buffer[chunk.offset..])?;
             if chunk.is_last_chunk {
@@ -104,15 +80,6 @@ fn start_write_thread(output_path: PathBuf, input: Receiver<Chunk>, output: Send
     })
 }
 
-fn derive_key_from_password(password: &str, key_size: usize) -> Vec<u8> {
-    let mut key = vec![0u8; key_size];  // KEYBYTES = 32
-    let salt =   // NOTE: We use static salt.
-        "rust-crypto-test-salt".bytes().cycle().take(pwhash::SALTBYTES).collect::<Vec<u8>>();
-    let salt = pwhash::Salt::from_slice(&salt).unwrap();
-    pwhash::derive_key_interactive(key.as_mut_slice(), password.as_bytes(), &salt).unwrap();
-
-    key
-}
 
 fn start_progress_thread() -> (Sender<usize>, thread::JoinHandle<()>) {
     let (sender, receiver) = unbounded_channel();
@@ -194,11 +161,11 @@ enum Opt {
     Encrypt {
         /// Input path ("-" for stdin)
         #[structopt(parse(from_os_str))]
-        input: PathBuf,
+        input_path: PathBuf,
 
         /// Output path ("-" for stdout)
         #[structopt(parse(from_os_str))]
-        output: PathBuf,
+        output_path: PathBuf,
 
         /// Password
         #[structopt(short = "p", long = "password")]
@@ -212,114 +179,142 @@ enum Opt {
     Decrypt {
         /// Input path ("-" for stdin)
         #[structopt(parse(from_os_str))]
-        input: PathBuf,
+        input_path: PathBuf,
 
         /// Output path ("-" for stdout)
         #[structopt(parse(from_os_str))]
-        output: PathBuf,
+        output_path: PathBuf,
 
         /// Password
         #[structopt(short = "p", long = "password")]
         password: Option<String>,
-
-        #[structopt(long = "algorithm", default_value = "xchacha20")]
-        algorithm: String,
     }
 }
 
-#[allow(dead_code)]
-fn to_hex_string(bytes: impl AsRef<[u8]>) -> String {
-    bytes.as_ref().iter()
-       .map(|b| format!("{:02X}", b))
-       .collect::<Vec<String>>()
-       .join("")
+fn open_streams(input_path: &Path, output_path: &Path) -> Result<(Box<Read+Send>, Box<Write+Send>, Option<usize>), Error> {
+    let filesize = match input_path.to_str() {
+        Some("-") => None,
+        _ => Some(std::fs::metadata(&input_path)?.len() as usize),
+    };
+
+    let input_stream: Box<Read + Send> = match input_path.to_str() {
+        Some("-") => Box::new(stdin()),
+        _ => Box::new(File::open(&input_path)?),
+    };
+    let output_stream: Box<Write + Send> = match output_path.to_str() {
+        Some("-") => Box::new(stdout()),
+        _ => Box::new(File::create(output_path)?),
+    };
+
+    Ok((input_stream, output_stream, filesize))
 }
 
-fn main() -> Result<(), Error> {
+fn stream_convert_to_completion(mut stream_converter: Box<StreamConverter>, input_stream: Box<Read + Send>,
+                                output_stream: Box<Write + Send>, chunk_size: usize) -> Result<(), Error> {
+    let ChunkConfig {input_chunk_offset, input_chunk_asize, output_chunk_asize} = stream_converter.get_chunk_config();
+
+    // Channels
+    let (initial_sender, read_receiver) = unbounded_channel();
+    let (read_sender, codec_receiver) = unbounded_channel();
+    let (codec_sender, write_receiver) = unbounded_channel();
+    let (write_sender, final_receiver) = unbounded_channel();
+
+    // Threads
+    let read_thread = start_read_thread(input_stream, read_receiver, read_sender);
+    let codec_thread = thread::spawn(move || stream_converter.convert_blocking(codec_receiver, codec_sender));
+    let write_thread = start_write_thread(output_stream, write_receiver, write_sender);
+    let (progress_sender, progress_thread) = start_progress_thread();
+
+    // Send initial buffers in to start the pipeline.
+    let input_buffer_size = input_chunk_offset + chunk_size + input_chunk_asize;
+    let buffer_capacity = input_chunk_offset + chunk_size +
+        std::cmp::max(input_chunk_asize, output_chunk_asize) + 1;  // +1 byte to allow reader to check Eof
+    for _ in 0..5 {
+        let mut buffer = Vec::with_capacity(buffer_capacity);
+        buffer.resize(input_buffer_size, 0);
+        initial_sender.send(Chunk{
+            buffer,
+            offset: input_chunk_offset,
+            is_last_chunk: false,
+        }).ok();
+    }
+
+    // Wait while data flows through the pipeline, resupplying used buffers back to the reader.
+    for mut chunk in final_receiver {
+        progress_sender.send(chunk.buffer.len())?;
+        if chunk.buffer.capacity() == buffer_capacity {
+            chunk.offset = input_chunk_offset;
+            chunk.buffer.resize(input_buffer_size, 0);
+            initial_sender.send(chunk).ok();  // Ok to drop vectors when reading has stopped.
+        }
+    }
+    std::mem::drop(progress_sender);
+
+    progress_thread.join().map_err(|_| MyError::ThreadJoinError)?;
+    write_thread.join().map_err(|_| MyError::ThreadJoinError)??;
+    codec_thread.join().map_err(|_| MyError::ThreadJoinError)??;
+    read_thread.join().map_err(|_| MyError::ThreadJoinError)??;
+    Ok(())
+}
+
+fn derive_key_from_password(file_header: &FileHeader, key_size: usize, password: Option<String>) -> Result<Vec<u8>, Error> {
+    if let Some(password) = password {
+        Ok(registry::key_derivation_from_header(&file_header)?
+            .derive_key_from_password(&password, key_size)?)
+    } else {
+        Err(MyError::PasswordRequired.into())
+    }
+}
+
+fn _main() -> Result<(), Error> {
     sodiumoxide::init().map_err(MyError::InitError)?;
     let opt = Opt::from_args();
 
-    match &opt {
-        Opt::Encrypt {input, output, password, algorithm} |
-        Opt::Decrypt {input, output, password, algorithm} => {
-            let (progress_sender, progress_thread) = start_progress_thread();
+    match opt {
+        Opt::Encrypt {input_path, output_path, password, algorithm} => {
+            let (input_stream, mut output_stream, _filesize) = open_streams(&input_path, &output_path)?;
 
-            let codec: Box<StreamCodec> = match algorithm.as_str() {
-                "xchacha20" => Box::new(XChaCha20::new()),
-                "aes256gcm" => Box::new(Aes256Gcm::new(false)),
-                "aes256gcm-ext" => Box::new(Aes256Gcm::new(true)),
-                _ => return Err(MyError::UnknownAlgorithm(algorithm.clone()).into()),
-            };
+            let file_header = registry::header_from_command_line(Some(algorithm), None)?;
+
+            let codec = registry::codec_from_header(&file_header)?;
             let codec_config = codec.get_config();
+            let key = derive_key_from_password(&file_header, codec_config.key_size, password)?;
 
-            let key: Vec<u8> = if let Some(password) = password {
-                derive_key_from_password(password.as_str(), codec_config.key_size)
-            } else {
-                return Err(MyError::PasswordRequired.into());
-            };
+            let header_buf = file_header.write(&mut output_stream)?;
 
-            // Channels
-            let (initial_sender, read_receiver) = unbounded_channel();
-            let (read_sender, codec_receiver) = unbounded_channel();
-            let (codec_sender, write_receiver) = unbounded_channel();
-            let (write_sender, final_receiver) = unbounded_channel();
+            let (codec_header, stream_converter) = codec.start_encoding(key, Some(header_buf))?;
+            output_stream.write_all(&codec_header)?;
 
-            let header_size = match &opt {
-                Opt::Encrypt{..} => None,
-                Opt::Decrypt{..} => Some(codec_config.header_size),
-            };
+            stream_convert_to_completion(stream_converter, input_stream, output_stream,
+                                         file_header.chunk_size as usize)?;
+        },
+        Opt::Decrypt {input_path, output_path, password} => {
 
-            let (read_thread, _file_size) = start_read_thread(
-                input.clone(), read_receiver, read_sender, header_size
-            )?;
+            let (mut input_stream, output_stream, _filesize) = open_streams(&input_path, &output_path)?;
 
-            let mut stream_converter = match &opt {
-                Opt::Encrypt{..} => {
-                    let (header, stream_converter) = codec.start_encoding(key)?;
-                    codec_sender.send(Chunk{buffer: header, offset: 0, is_last_chunk: false})?;
-                    stream_converter
-                },
-                Opt::Decrypt{..} => {
-                    let header = codec_receiver.recv()?;
-                    codec.start_decoding(key, header.buffer)?
-                },
-            };
-            let ChunkConfig {input_chunk_offset, input_chunk_asize, output_chunk_asize} = stream_converter.get_chunk_config();
+            let (file_header, header_buf) = FileHeader::read(&mut input_stream)?;
+            eprintln!("File header: {:?}", file_header);
+            eprintln!("Buf: {} (len {})", util::to_hex_string(&header_buf), header_buf.len());
 
-            let codec_thread = thread::spawn(move || stream_converter.convert_blocking(codec_receiver, codec_sender));
-            let write_thread = start_write_thread(output.clone(),write_receiver, write_sender);
+            let codec = registry::codec_from_header(&file_header)?;
+            let codec_config = codec.get_config();
+            let key = derive_key_from_password(&file_header, codec_config.key_size, password)?;
 
-            // Send initial buffers in to start the pipeline.
-            let input_chunk_size = input_chunk_offset + CHUNK_SIZE + input_chunk_asize;
-            let buf_capacity = input_chunk_offset + CHUNK_SIZE +
-                std::cmp::max(input_chunk_asize, output_chunk_asize) + 1;  // +1 byte to allow reader to check Eof
-            for _ in 0..5 {
-                let mut buffer = Vec::with_capacity(buf_capacity);
-                buffer.resize(input_chunk_size, 0);
-                initial_sender.send(Chunk{
-                    buffer,
-                    offset: input_chunk_offset,
-                    is_last_chunk: false,
-                })?;
-            }
+            let mut codec_header = vec![0u8; codec_config.header_size];
+            input_stream.read_exact(&mut codec_header)?;
+            let stream_converter = codec.start_decoding(key, codec_header, Some(header_buf))?;
 
-            // Wait while pipeline works, resupplying used buffers back to the reader.
-            for mut chunk in final_receiver {
-                progress_sender.send(chunk.buffer.len())?;
-                if chunk.buffer.capacity() == buf_capacity {
-                    chunk.offset = input_chunk_offset;
-                    chunk.buffer.resize(input_chunk_size, 0);
-                    initial_sender.send(chunk).ok();  // Ok to drop vectors when reading has stopped.
-                }
-            }
-            std::mem::drop(progress_sender);
-
-            progress_thread.join().map_err(|_| MyError::ThreadJoinError)?;
-            read_thread.join().map_err(|_| MyError::ThreadJoinError)??;
-            codec_thread.join().map_err(|_| MyError::ThreadJoinError)??;
-            write_thread.join().map_err(|_| MyError::ThreadJoinError)??;
+            stream_convert_to_completion(stream_converter, input_stream, output_stream,
+                                         file_header.chunk_size as usize)?;
         },
     }
 
     Ok(())
+}
+
+fn main() {
+    if let Err(e) = _main() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
 }

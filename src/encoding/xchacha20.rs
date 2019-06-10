@@ -1,5 +1,5 @@
+use std::os::raw::c_ulonglong;
 
-use crate::codec::{StreamCodec, MyError, Chunk, StreamConverter, ChunkConfig, StreamCodecConfig};
 use crossbeam_channel::{Receiver, Sender};
 use failure::{Error};
 use libsodium_sys::{
@@ -9,7 +9,9 @@ use libsodium_sys::{
     crypto_secretstream_xchacha20poly1305_init_pull as init_pull,
     crypto_secretstream_xchacha20poly1305_pull as stream_pull,
 };
-use std::os::raw::c_ulonglong;
+
+use crate::types::{StreamCodec, Chunk, StreamConverter, ChunkConfig, StreamCodecConfig};
+use crate::errors::MyError;
 
 const ABYTES: usize = libsodium_sys::crypto_secretstream_xchacha20poly1305_ABYTES as usize;
 const KEYBYTES: usize = libsodium_sys::crypto_secretstream_xchacha20poly1305_KEYBYTES as usize;
@@ -34,23 +36,24 @@ impl StreamCodec for XChaCha20 {
         }
     }
 
-    fn start_encoding(&self, key: Vec<u8>) -> Result<(Vec<u8>, Box<StreamConverter>), Error> {
-        let (converter, header) = XChaCha20Encoder::new(key)?;
+    fn start_encoding(&self, key: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<(Vec<u8>, Box<StreamConverter>), Error> {
+        let (converter, header) = XChaCha20Encoder::new(key, authenticate_data)?;
         Ok((header, Box::new(converter)))
     }
 
-    fn start_decoding(&self, key: Vec<u8>, header: Vec<u8>) -> Result<Box<StreamConverter>, Error> {
-        Ok(Box::new(XChaCha20Decoder::new(key, header)?))
+    fn start_decoding(&self, key: Vec<u8>, header: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<Box<StreamConverter>, Error> {
+        Ok(Box::new(XChaCha20Decoder::new(key, header, authenticate_data)?))
     }
 
 }
 
 pub struct XChaCha20Encoder {
     state: StreamState,
+    authenticate_data: Option<Vec<u8>>,
 }
 
 impl XChaCha20Encoder {
-    fn new(key: Vec<u8>) -> Result<(XChaCha20Encoder, Vec<u8>), Error> {
+    fn new(key: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<(XChaCha20Encoder, Vec<u8>), Error> {
         assert_eq!(key.len(), KEYBYTES);
         let mut header = vec![0u8; HEADERBYTES];
         let state: StreamState = unsafe {
@@ -58,7 +61,7 @@ impl XChaCha20Encoder {
             init_push(&mut state, header.as_mut_ptr(), key.as_ptr()); // NOTE: init_push always succeeds.
             state
         };
-        Ok((XChaCha20Encoder{state}, header))
+        Ok((XChaCha20Encoder{state, authenticate_data}, header))
     }
 }
 
@@ -82,6 +85,11 @@ impl StreamConverter for XChaCha20Encoder {
             let tag = if chunk.is_last_chunk { TAG_FINAL } else { TAG_MESSAGE } as u8;
 
             unsafe {
+                let (ad_ptr, ad_len) = match self.authenticate_data.take() {
+                    Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),
+                    None => (std::ptr::null(), 0 as c_ulonglong)
+                };
+
                 // NOTE: `stream_push` always succeeds.
                 // NOTE: The buffer is encoded in-place. This is only possible due to the pointer shift
                 // made by PREFIX_SIZE. (see function's internals at https://github.com/jedisct1/libsodium/blob/1.0.18/src/libsodium/crypto_secretstream/xchacha20poly1305/secretstream_xchacha20poly1305.c#L147
@@ -92,8 +100,8 @@ impl StreamConverter for XChaCha20Encoder {
                     std::ptr::null_mut(),
                     chunk.buffer.as_ptr().offset(chunk.offset as isize),
                     plaintext_len as c_ulonglong,
-                    std::ptr::null(),
-                    0 as c_ulonglong,
+                    ad_ptr,
+                    ad_len,
                     tag,
                 );
             }
@@ -106,22 +114,25 @@ impl StreamConverter for XChaCha20Encoder {
 
 pub struct XChaCha20Decoder {
     state: StreamState,
+    authenticate_data: Option<Vec<u8>>,
 }
 
 impl XChaCha20Decoder {
-    fn new(key: Vec<u8>, header: Vec<u8>) -> Result<XChaCha20Decoder, Error> {
+    fn new(key: Vec<u8>, header: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<XChaCha20Decoder, Error> {
         assert_eq!(key.len(), KEYBYTES);
-        assert_eq!(header.len(), HEADERBYTES);
+        if header.len() != HEADERBYTES {
+            return Err(MyError::InvalidHeader("Invalid XChacha20 header length".into()).into());
+        }
 
         let state: StreamState = unsafe {
             let mut state: StreamState = std::mem::zeroed();
             let rc = init_pull(&mut state, header.as_ptr(), key.as_ptr());
             if rc != 0 {
-                return Err(MyError::InvalidHeader.into());
+                return Err(MyError::InvalidHeader("Invalid XChacha20 header".into()).into());
             }
             state
         };
-        Ok(XChaCha20Decoder{state})
+        Ok(XChaCha20Decoder{state, authenticate_data})
     }
 }
 
@@ -140,11 +151,16 @@ impl StreamConverter for XChaCha20Decoder {
             const SUFFIX_SIZE: usize = ABYTES - PREFIX_SIZE;
             let chunk_size = chunk.buffer.len() - chunk.offset;
             if chunk_size < ABYTES {
-                return Err(MyError::DecryptionError.into());  // Chunk too small to be valid.
+                return Err(MyError::DecryptionError("Chunk too small to be valid".into()).into());
             }
             let mut tag: u8 = unsafe { std::mem::zeroed() };
 
             let rc = unsafe {
+                let (ad_ptr, ad_len) = match self.authenticate_data.take() {
+                    Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),
+                    None => (std::ptr::null(), 0 as c_ulonglong)
+                };
+
                 // NOTE: The buffer is decoded in-place. This is only possible due to the pointer shift
                 // made by PREFIX_SIZE. (see function's internals at https://github.com/jedisct1/libsodium/blob/1.0.18/src/libsodium/crypto_secretstream/xchacha20poly1305/secretstream_xchacha20poly1305.c#L147
                 // and the fact that crypto_stream_chacha20_ietf_xor_ic can do encryption in-place: https://libsodium.gitbook.io/doc/advanced/stream_ciphers/xchacha20#usage)
@@ -155,15 +171,15 @@ impl StreamConverter for XChaCha20Decoder {
                     &mut tag,
                     chunk.buffer.as_ptr().offset(chunk.offset as isize),
                     chunk_size as c_ulonglong,
-                    std::ptr::null(),
-                    0 as c_ulonglong,
+                    ad_ptr,
+                    ad_len,
                 )
             };
             if rc != 0 {
-                return Err(MyError::DecryptionError.into());  // Invalid chunk.
+                return Err(MyError::DecryptionError("Invalid data".into()).into());
             }
             if (tag == TAG_FINAL) != chunk.is_last_chunk {
-                return Err(MyError::DecryptionError.into());  // Final chunk is not the last chunk.
+                return Err(MyError::DecryptionError("Last chunk is not finalized".into()).into());
             }
 
             chunk.buffer.truncate(chunk.buffer.len() - SUFFIX_SIZE);

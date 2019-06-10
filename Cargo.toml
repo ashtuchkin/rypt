@@ -12,6 +12,8 @@ term = "0.5.*"
 humansize = "1.1.*"
 crossbeam-channel = "0.3.*"
 libsodium-sys = "0.2.2"
+prost = "0.5.*"
+bytes = "0.4.*"
 
 [profile.release]
 lto = true

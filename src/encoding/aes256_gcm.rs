@@ -1,4 +1,5 @@
-use crate::codec::{StreamCodec, MyError, Chunk, StreamConverter, ChunkConfig, StreamCodecConfig};
+use std::os::raw::{c_ulonglong, c_void};
+
 use crossbeam_channel::{Receiver, Sender};
 use failure::{Error};
 use libsodium_sys::{
@@ -10,7 +11,10 @@ use libsodium_sys::{
     sodium_increment,
     randombytes_buf,
 };
-use std::os::raw::{c_ulonglong, c_void};
+
+use crate::types::{StreamCodec, Chunk, StreamConverter, ChunkConfig, StreamCodecConfig};
+use crate::errors::MyError;
+use crate::header::AES256GCMConfig;
 
 const ABYTES: usize = libsodium_sys::crypto_aead_aes256gcm_ABYTES as usize;  // 16
 const KEYBYTES: usize = libsodium_sys::crypto_aead_aes256gcm_KEYBYTES as usize;  // 32
@@ -67,8 +71,8 @@ pub struct Aes256Gcm {
 }
 
 impl Aes256Gcm {
-    pub fn new(extended_nonce: bool) -> Aes256Gcm {
-        Aes256Gcm{extended_nonce}
+    pub fn new(config: &AES256GCMConfig) -> Aes256Gcm {
+        Aes256Gcm{extended_nonce: config.extended_nonce}
     }
 }
 
@@ -80,23 +84,24 @@ impl StreamCodec for Aes256Gcm {
         }
     }
 
-    fn start_encoding(&self, key: Vec<u8>) -> Result<(Vec<u8>, Box<StreamConverter>), Error> {
-        let (converter, header) = Aes256GcmEncoder::new(key, self.extended_nonce)?;
+    fn start_encoding(&self, key: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<(Vec<u8>, Box<StreamConverter>), Error> {
+        let (converter, header) = Aes256GcmEncoder::new(key, authenticate_data, self.extended_nonce)?;
         Ok((header, Box::new(converter)))
     }
 
-    fn start_decoding(&self, key: Vec<u8>, header: Vec<u8>) -> Result<Box<StreamConverter>, Error> {
-        Ok(Box::new(Aes256GcmDecoder::new(key, header, self.extended_nonce)?))
+    fn start_decoding(&self, key: Vec<u8>, header: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<Box<StreamConverter>, Error> {
+        Ok(Box::new(Aes256GcmDecoder::new(key, header, authenticate_data, self.extended_nonce)?))
     }
 }
 
 struct Aes256GcmEncoder {
     state: [u8; STATE_BYTES],  // 32 byte key, 24 byte long nonce, 8 byte counter.
+    authenticate_data: Option<Vec<u8>>,
     extended_nonce: bool,
 }
 
 impl Aes256GcmEncoder {
-    fn new(key: Vec<u8>, extended_nonce: bool) -> Result<(Aes256GcmEncoder, Vec<u8>), Error> {
+    fn new(key: Vec<u8>, authenticate_data: Option<Vec<u8>>, extended_nonce: bool) -> Result<(Aes256GcmEncoder, Vec<u8>), Error> {
         assert_eq!(key.len(), KEYBYTES);
         if unsafe {aes256gcm_is_available()} == 0 {
             return Err(MyError::HardwareUnsupported.into())
@@ -115,7 +120,7 @@ impl Aes256GcmEncoder {
         // Header is just the nonce
         let header = nonce;
 
-        Ok((Aes256GcmEncoder{state, extended_nonce}, header))
+        Ok((Aes256GcmEncoder{state, extended_nonce, authenticate_data}, header))
     }
 }
 
@@ -160,14 +165,19 @@ impl StreamConverter for Aes256GcmEncoder {
                     (self.state.as_ptr(), self.state.as_ptr().offset(KEYBYTES as isize))
                 };
 
+                let (ad_ptr, ad_len) = match self.authenticate_data.take() {
+                    Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),
+                    None => (std::ptr::null(), 0 as c_ulonglong)
+                };
+
                 // Use the key and nonce for this chunk. NOTE: Encoding happens in-place.
                 aes256gcm_encrypt(
                     chunk.buffer.as_mut_ptr(),
                     std::ptr::null_mut(),
                     chunk.buffer.as_ptr(),
                     plaintext_len as c_ulonglong,
-                    std::ptr::null(),
-                    0 as c_ulonglong,
+                    ad_ptr,
+                    ad_len,
                     std::ptr::null(),
                     nonce_ptr,
                     key_ptr,
@@ -182,15 +192,18 @@ impl StreamConverter for Aes256GcmEncoder {
 
 struct Aes256GcmDecoder {
     state: [u8; STATE_BYTES],  // 8 byte counter, then 24 byte long nonce, then 32 byte key.
+    authenticate_data: Option<Vec<u8>>,
     extended_nonce: bool,
 }
 
 impl Aes256GcmDecoder {
-    fn new(key: Vec<u8>, header: Vec<u8>, extended_nonce: bool) -> Result<Aes256GcmDecoder, Error> {
+    fn new(key: Vec<u8>, header: Vec<u8>, authenticate_data: Option<Vec<u8>>, extended_nonce: bool) -> Result<Aes256GcmDecoder, Error> {
         let nonce_len = header_size(extended_nonce);
         let nonce = header;
         assert_eq!(key.len(), KEYBYTES);
-        assert_eq!(nonce.len(), nonce_len);
+        if nonce.len() != nonce_len {
+            return Err(MyError::InvalidHeader("Invalid Aes256Gcm header length".into()).into());
+        }
         if unsafe {aes256gcm_is_available()} == 0 {
             return Err(MyError::HardwareUnsupported.into())
         }
@@ -200,7 +213,7 @@ impl Aes256GcmDecoder {
         state[..KEYBYTES].copy_from_slice(&key);
         state[KEYBYTES..KEYBYTES+nonce_len].copy_from_slice(&nonce);
 
-        Ok(Aes256GcmDecoder{state, extended_nonce})
+        Ok(Aes256GcmDecoder{state, authenticate_data, extended_nonce})
     }
 }
 
@@ -240,6 +253,10 @@ impl StreamConverter for Aes256GcmDecoder {
 
                     (self.state.as_ptr(), self.state.as_ptr().offset(KEYBYTES as isize))
                 };
+                let (ad_ptr, ad_len) = match self.authenticate_data.take() {
+                    Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),
+                    None => (std::ptr::null(), 0 as c_ulonglong)
+                };
 
                 // NOTE: Encoding happens in-place.
                 aes256gcm_decrypt(
@@ -248,14 +265,14 @@ impl StreamConverter for Aes256GcmDecoder {
                     std::ptr::null_mut(),
                     chunk.buffer.as_ptr(),
                     ciphertext_len as c_ulonglong,
-                    std::ptr::null(),
-                    0 as c_ulonglong,
+                    ad_ptr,
+                    ad_len,
                     nonce_ptr,
                     key_ptr,
                 )
             };
             if rc != 0 {
-                return Err(MyError::DecryptionError.into());
+                return Err(MyError::DecryptionError("Invalid data".into()).into());
             }
 
             chunk.buffer.truncate(ciphertext_len - ABYTES);
