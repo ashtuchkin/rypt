@@ -7,7 +7,7 @@ use crate::header::{FileHeader, EncodingAlgorithm, AES256GCMConfig, XChaCha20Pol
 use crate::key_derivation::SCryptSalsa208SHA256;
 
 
-pub fn header_from_command_line(algorithm: Option<String>, chunk_size: Option<usize>) -> Result<FileHeader, Error> {
+pub fn header_from_command_line(algorithm: &Option<String>, chunk_size: &Option<usize>) -> Result<FileHeader, Error> {
     // Start with default values.
     let mut header = FileHeader {
         algorithm: Some(EncodingAlgorithm::XChaCha20Poly1305(XChaCha20Poly1305Config{})),
@@ -25,7 +25,7 @@ pub fn header_from_command_line(algorithm: Option<String>, chunk_size: Option<us
     }
 
     if let Some(chunk_size) = chunk_size {
-        header.chunk_size = chunk_size as u64;
+        header.chunk_size = *chunk_size as u64;
     }
 
     Ok(header)

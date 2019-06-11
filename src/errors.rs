@@ -4,7 +4,7 @@ use prost::DecodeError;
 #[derive(Fail, Debug)]
 pub enum MyError {
     #[fail(display = "Sodium library initialization error")]
-    InitError(()),
+    InitError,
 
     #[fail(display = "Password required")]
     PasswordRequired,

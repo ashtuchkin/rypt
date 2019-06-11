@@ -1,194 +1,53 @@
-use std::io::{Read, Write, ErrorKind, stdin, stdout};
-use std::path::{PathBuf, Path};
+use std::collections::{VecDeque, BTreeMap};
+use std::{env, fs};
 use std::fs::File;
-use std::thread;
-use std::time::{Duration, Instant};
-use std::collections::VecDeque;
+use std::io::{Read, Write, stdin, stdout};
+use std::path::{PathBuf, Path};
 
-use structopt::StructOpt;
-use failure::{Error};
-use humansize::{FileSize, file_size_opts::CONVENTIONAL as ConventionalSize};
-use crossbeam_channel::{Sender, Receiver, unbounded as unbounded_channel, tick};
-use crate::types::{Chunk, ChunkConfig, StreamConverter};
+use failure::{Error, bail};
+
 use crate::errors::MyError;
 use crate::header::FileHeader;
+use crate::streaming_core::stream_convert_to_completion;
+use std::ffi::OsString;
 
-mod types;
 mod encoding;
+mod errors;
 mod header;
 mod key_derivation;
-mod errors;
 mod registry;
+mod streaming_core;
+mod types;
 mod util;
 
-fn start_read_thread(mut input_stream: Box<Read + Send>, input: Receiver<Chunk>, output: Sender<Chunk>)
-                        -> thread::JoinHandle<Result<(), Error>> {
-    thread::spawn(move || -> Result<(), Error> {
-        let mut last_byte = None;
-        for mut chunk in input {
-            chunk.buffer.push(0); // Add one byte to allow determining final chunk.
+// See https://stackoverflow.com/a/27841363 for full list.
+const PKG_VERSION: &'static str = env!("CARGO_PKG_VERSION");
+const PKG_NAME: &'static str = env!("CARGO_PKG_NAME");
 
-            let mut read_ptr = chunk.offset;
-            if let Some(last_byte) = last_byte {
-                chunk.buffer[read_ptr] = last_byte;
-                read_ptr += 1;
-            }
-
-            while read_ptr < chunk.buffer.len() {
-                match input_stream.read(&mut chunk.buffer[read_ptr..]) {
-                    Ok(read_bytes) => {
-                        if read_bytes > 0 {
-                            // Continue reading into the buffer, adjusting the slices.
-                            read_ptr += read_bytes;
-
-                        } else {
-                            // Reached end of file. Send the last chunk.
-                            chunk.buffer.truncate(read_ptr);
-                            chunk.is_last_chunk = true;
-                            output.send(chunk)?;
-                            return Ok(());
-                        }
-                    },
-                    Err(e) => {
-                        if e.kind() != ErrorKind::Interrupted {
-                            return Err(e.into());
-                        }
-                        // Retry when interrupted
-                    },
-                }
-            }
-
-            // Stream has more data; keep last byte and send remaining data
-            last_byte = chunk.buffer.pop();
-            chunk.is_last_chunk = false;
-            output.send(chunk)?;
-        }
-        Err(std::io::Error::from(ErrorKind::NotConnected).into())
-    })
+#[derive(Debug, Copy, Clone)]
+enum OperationMode {
+    Encrypt,
+    Decrypt,
 }
 
-fn start_write_thread(mut output_stream: Box<Write+Send>, input: Receiver<Chunk>, output: Sender<Chunk>) -> thread::JoinHandle<Result<(), Error>> {
-    thread::spawn(move || -> Result<(), Error> {
-        for chunk in input {
-            output_stream.write_all(&chunk.buffer[chunk.offset..])?;
-            if chunk.is_last_chunk {
-                output_stream.flush()?;
-            }
-            output.send(chunk)?;
-        }
-        Ok(())
-    })
-}
+#[derive(Debug)]
+struct Options {
+    mode: OperationMode,
 
+    stdin_is_tty: bool,
+    stdout_is_tty: bool,
 
-fn start_progress_thread() -> (Sender<usize>, thread::JoinHandle<()>) {
-    let (sender, receiver) = unbounded_channel();
-    const PRINT_PERIOD: Duration = Duration::from_millis(100);
-    const SPEED_CALC_PERIOD: Duration = Duration::from_secs(10);  // Calculate speed over the last 5 seconds
-    const KEEP_STAMPS_COUNT: usize = (SPEED_CALC_PERIOD.as_millis() / PRINT_PERIOD.as_millis()) as usize;
-    let print_ticker = tick(PRINT_PERIOD);
-    let start_time = Instant::now();
-    let mut cur_progress = 0usize;
-    let mut cur_progress_time = Instant::now();
-    let mut term = term::stderr().unwrap();
-    let mut stamps = VecDeque::new();
-    stamps.push_back((cur_progress_time, cur_progress));
-    let mut has_ever_printed = false;
+    /// Input paths ("-" for stdin)
+    input_paths: Vec<PathBuf>,
 
-    fn human_readable_duration(dur: Duration) -> String {
-        let secs_f64 = dur.as_millis() as f64 / 1000f64;
-        format!("{:.1}s", secs_f64)
-    }
+    suffix: OsString,
 
-    let mut print_progress = move |stamps: &VecDeque<(Instant, usize)>, final_print: bool| {
-        let (end_period_time, end_period_progress) = *stamps.back().unwrap();
-        let (start_period_time, start_period_progress) = *stamps.front().unwrap();
-        let delta_time = (end_period_time - start_period_time).as_millis() as usize;
-        let delta_progress = end_period_progress - start_period_progress;
-        if delta_time > 0 && delta_progress > 0 {
-            let speed = delta_progress * 1000 / delta_time;
-            term.carriage_return().ok();
-            term.delete_line().ok();
-            write!(
-                term, "Progress: {}, Speed: {}/s, Time: {}",
-                end_period_progress.file_size(ConventionalSize).unwrap(),
-                speed.file_size(ConventionalSize).unwrap(),
-                human_readable_duration(Instant::now() - start_time),
-            ).ok();
-            if final_print && has_ever_printed {
-                writeln!(term).ok();
-            }
-            has_ever_printed = true;
-        }
-    };
+    /// Password
+    password: Option<String>,
 
-    let join_handle = thread::spawn(move || {
-        loop {
-            crossbeam_channel::select! {
-                recv(receiver) -> res => match res {
-                    Ok(increment_size) => {
-                        cur_progress += increment_size;
-                        cur_progress_time = std::cmp::max(cur_progress_time, Instant::now());
-                    },
-                    Err(_) => {  // Disconnected - finish printing and exit.
-                        print_progress(&stamps, true);
-                        break;
-                    }
-                },
-                recv(print_ticker) -> _ => {
-                    stamps.push_back((cur_progress_time, cur_progress));
-                    if stamps.len() > KEEP_STAMPS_COUNT {
-                        stamps.pop_front();
-                    }
+    algorithm: Option<String>,
 
-                    print_progress(&stamps, false);
-                },
-            }
-        }
-    });
-
-    (sender, join_handle)
-}
-
-#[derive(Debug, StructOpt)]
-// #[structopt(name = "sodium-codec", about = "A command line utility to do encryption/decryption.")]
-enum Opt {
-//    /// Set speed
-//    #[structopt(short = "s", long = "speed", default_value = "42")]
-//    speed: f64,
-
-    #[structopt(name = "enc")]
-    Encrypt {
-        /// Input path ("-" for stdin)
-        #[structopt(parse(from_os_str))]
-        input_path: PathBuf,
-
-        /// Output path ("-" for stdout)
-        #[structopt(parse(from_os_str))]
-        output_path: PathBuf,
-
-        /// Password
-        #[structopt(short = "p", long = "password")]
-        password: Option<String>,
-
-        #[structopt(long = "algorithm", default_value = "xchacha20")]
-        algorithm: String,
-    },
-
-    #[structopt(name = "dec")]
-    Decrypt {
-        /// Input path ("-" for stdin)
-        #[structopt(parse(from_os_str))]
-        input_path: PathBuf,
-
-        /// Output path ("-" for stdout)
-        #[structopt(parse(from_os_str))]
-        output_path: PathBuf,
-
-        /// Password
-        #[structopt(short = "p", long = "password")]
-        password: Option<String>,
-    }
+    verbose: i32,
 }
 
 fn open_streams(input_path: &Path, output_path: &Path) -> Result<(Box<Read+Send>, Box<Write+Send>, Option<usize>), Error> {
@@ -209,55 +68,7 @@ fn open_streams(input_path: &Path, output_path: &Path) -> Result<(Box<Read+Send>
     Ok((input_stream, output_stream, filesize))
 }
 
-fn stream_convert_to_completion(mut stream_converter: Box<StreamConverter>, input_stream: Box<Read + Send>,
-                                output_stream: Box<Write + Send>, chunk_size: usize) -> Result<(), Error> {
-    let ChunkConfig {input_chunk_offset, input_chunk_asize, output_chunk_asize} = stream_converter.get_chunk_config();
-
-    // Channels
-    let (initial_sender, read_receiver) = unbounded_channel();
-    let (read_sender, codec_receiver) = unbounded_channel();
-    let (codec_sender, write_receiver) = unbounded_channel();
-    let (write_sender, final_receiver) = unbounded_channel();
-
-    // Threads
-    let read_thread = start_read_thread(input_stream, read_receiver, read_sender);
-    let codec_thread = thread::spawn(move || stream_converter.convert_blocking(codec_receiver, codec_sender));
-    let write_thread = start_write_thread(output_stream, write_receiver, write_sender);
-    let (progress_sender, progress_thread) = start_progress_thread();
-
-    // Send initial buffers in to start the pipeline.
-    let input_buffer_size = input_chunk_offset + chunk_size + input_chunk_asize;
-    let buffer_capacity = input_chunk_offset + chunk_size +
-        std::cmp::max(input_chunk_asize, output_chunk_asize) + 1;  // +1 byte to allow reader to check Eof
-    for _ in 0..5 {
-        let mut buffer = Vec::with_capacity(buffer_capacity);
-        buffer.resize(input_buffer_size, 0);
-        initial_sender.send(Chunk{
-            buffer,
-            offset: input_chunk_offset,
-            is_last_chunk: false,
-        }).ok();
-    }
-
-    // Wait while data flows through the pipeline, resupplying used buffers back to the reader.
-    for mut chunk in final_receiver {
-        progress_sender.send(chunk.buffer.len())?;
-        if chunk.buffer.capacity() == buffer_capacity {
-            chunk.offset = input_chunk_offset;
-            chunk.buffer.resize(input_buffer_size, 0);
-            initial_sender.send(chunk).ok();  // Ok to drop vectors when reading has stopped.
-        }
-    }
-    std::mem::drop(progress_sender);
-
-    progress_thread.join().map_err(|_| MyError::ThreadJoinError)?;
-    write_thread.join().map_err(|_| MyError::ThreadJoinError)??;
-    codec_thread.join().map_err(|_| MyError::ThreadJoinError)??;
-    read_thread.join().map_err(|_| MyError::ThreadJoinError)??;
-    Ok(())
-}
-
-fn derive_key_from_password(file_header: &FileHeader, key_size: usize, password: Option<String>) -> Result<Vec<u8>, Error> {
+fn derive_key_from_password(file_header: &FileHeader, key_size: usize, password: &Option<String>) -> Result<Vec<u8>, Error> {
     if let Some(password) = password {
         Ok(registry::key_derivation_from_header(&file_header)?
             .derive_key_from_password(&password, key_size)?)
@@ -266,49 +77,159 @@ fn derive_key_from_password(file_header: &FileHeader, key_size: usize, password:
     }
 }
 
-fn _main() -> Result<(), Error> {
-    sodiumoxide::init().map_err(MyError::InitError)?;
-    let opt = Opt::from_args();
+fn parse_command_line() -> Result<Options, Error>{
+    let mut args: VecDeque<String> = env::args().collect();
+    let program = args.pop_front().unwrap();
 
-    match opt {
-        Opt::Encrypt {input_path, output_path, password, algorithm} => {
-            let (input_stream, mut output_stream, _filesize) = open_streams(&input_path, &output_path)?;
+    let mut options = getopts::Options::new();
+    options
+        .optflag("e", "encrypt", "force encryption mode (default)")
+        .optflag("d", "decrypt", "force decryption mode")
+        .optopt("p", "password", "provide password", "PASSWORD")
+        .optopt("a", "algorithm", "choose algorithm for encryption", "ALG")
+        .optflag("s", "stdout", "write to standard output and don't delete input files")
+        .optopt("S", "suffix", "encrypted file suffix, defaults to .enc", ".suf")
+        .optflagmulti("v", "verbose", "be verbose; specify twice for even more verbose")
+        .optflag("h", "help", "display this short help and exit")
+        .optflag("V", "version", "display the version numbers and exit");
 
-            let file_header = registry::header_from_command_line(Some(algorithm), None)?;
+    let matches = options.parse(&args)?;
+    let stdin_is_tty = termion::is_tty(&std::io::stdin());
+    let stdout_is_tty = termion::is_tty(&std::io::stdout());
 
-            let codec = registry::codec_from_header(&file_header)?;
-            let codec_config = codec.get_config();
-            let key = derive_key_from_password(&file_header, codec_config.key_size, password)?;
+    // Process help and version right here.
+    if matches.opt_present("h") || (args.is_empty() && stdin_is_tty) {
+        println!("\
+Usage: {} [OPTION].. [FILE]..
+Encrypt or decrypt FILEs
 
-            let header_buf = file_header.write(&mut output_stream)?;
+{}
 
-            let (codec_header, stream_converter) = codec.start_encoding(key, Some(header_buf))?;
-            output_stream.write_all(&codec_header)?;
+With no FILE, or when FILE is -, read standard input.
 
-            stream_convert_to_completion(stream_converter, input_stream, output_stream,
-                                         file_header.chunk_size as usize)?;
-        },
-        Opt::Decrypt {input_path, output_path, password} => {
+Report bugs to Alexander Shtuchkin <ashtuchkin@gmail.com>.
+Home page and documentation: <https://github.com/ashtuchkin/xxx>",
+           program, options.usage("").trim());
+        std::process::exit(0);
 
-            let (mut input_stream, output_stream, _filesize) = open_streams(&input_path, &output_path)?;
-
-            let (file_header, header_buf) = FileHeader::read(&mut input_stream)?;
-            eprintln!("File header: {:?}", file_header);
-            eprintln!("Buf: {} (len {})", util::to_hex_string(&header_buf), header_buf.len());
-
-            let codec = registry::codec_from_header(&file_header)?;
-            let codec_config = codec.get_config();
-            let key = derive_key_from_password(&file_header, codec_config.key_size, password)?;
-
-            let mut codec_header = vec![0u8; codec_config.header_size];
-            input_stream.read_exact(&mut codec_header)?;
-            let stream_converter = codec.start_decoding(key, codec_header, Some(header_buf))?;
-
-            stream_convert_to_completion(stream_converter, input_stream, output_stream,
-                                         file_header.chunk_size as usize)?;
-        },
+    } else if matches.opt_present("V") {
+        println!("{} {}", PKG_NAME, PKG_VERSION);
+        let libsodium_version = unsafe { std::ffi::CStr::from_ptr(libsodium_sys::sodium_version_string())};
+        println!("libsodium {}", libsodium_version.to_str()?);
+        std::process::exit(0);
     }
 
+    // Figure out the mode - it's the last mode-related argument, or Encrypt by default.
+    let mut all_modes: BTreeMap<usize, OperationMode> = BTreeMap::new();
+    all_modes.extend(matches.opt_positions("e").into_iter().map(|p| (p, OperationMode::Encrypt)));
+    all_modes.extend(matches.opt_positions("d").into_iter().map(|p| (p, OperationMode::Decrypt)));
+
+    let mode = all_modes.values().next_back().copied()
+        .unwrap_or(OperationMode::Encrypt);
+
+    // Figure out the input paths.
+    let input_paths = if matches.free.is_empty() {
+        vec![PathBuf::from("-")]
+    } else {
+        matches.free.iter().map(|s| s.into()).collect()
+    };
+
+    Ok(Options {
+        mode,
+        stdin_is_tty,
+        stdout_is_tty,
+        input_paths,
+        suffix: OsString::from(matches.opt_default("S", "enc").unwrap_or("enc".into())),
+        password: matches.opt_str("p"),
+        algorithm: matches.opt_str("a"),
+        verbose: matches.opt_count("v") as i32,
+    })
+}
+
+fn encrypt_file(input_path: &PathBuf, opts: &Options) -> Result<(), Error> {
+    let (output_path, remove_input) = if input_path.to_str() == Some("-") {
+        if opts.stdout_is_tty {
+            bail!("Encrypted data cannot be written to a terminal");
+        }
+        (PathBuf::from("-"), false)
+    } else {
+        let mut new_ext = input_path.extension().unwrap_or_default().to_os_string();
+        if !opts.suffix.to_str().unwrap_or_default().starts_with(".") {
+            new_ext.push(OsString::from("."));
+        }
+        new_ext.push(&opts.suffix);
+        (input_path.with_extension(new_ext), true)
+    };
+    let (input_stream, mut output_stream, _filesize) = open_streams(input_path, &output_path)?;
+
+    let file_header = registry::header_from_command_line(&opts.algorithm, &None)?;
+
+    let codec = registry::codec_from_header(&file_header)?;
+    let codec_config = codec.get_config();
+    let key = derive_key_from_password(&file_header, codec_config.key_size, &opts.password)?;
+
+    let header_buf = file_header.write(&mut output_stream)?;
+
+    let (codec_header, stream_converter) = codec.start_encoding(key, Some(header_buf))?;
+    output_stream.write_all(&codec_header)?;
+
+    stream_convert_to_completion(stream_converter, input_stream, output_stream,
+                                 file_header.chunk_size as usize)?;
+
+    if remove_input {
+        fs::remove_file(input_path)?;
+    }
+    Ok(())
+}
+
+fn decrypt_file(input_path: &PathBuf, opts: &Options) -> Result<(), Error> {
+    let (output_path, remove_input) = if input_path.to_str() == Some("-") {
+        if opts.stdout_is_tty {
+            bail!("Encrypted data cannot be read from a terminal.");
+        }
+        (PathBuf::from("-"), false)
+    } else {
+        if input_path.extension() != Some(&opts.suffix) {
+            bail!("{:?}: Filename has an unknown suffix, skipping.", input_path);
+        }
+        (input_path.with_extension(""), true)
+    };
+
+    let (mut input_stream, output_stream, _filesize) = open_streams(input_path, &output_path)?;
+
+    let (file_header, header_buf) = FileHeader::read(&mut input_stream)?;
+
+    let codec = registry::codec_from_header(&file_header)?;
+    let codec_config = codec.get_config();
+    let key = derive_key_from_password(&file_header, codec_config.key_size, &opts.password)?;
+
+    let mut codec_header = vec![0u8; codec_config.header_size];
+    input_stream.read_exact(&mut codec_header)?;
+    let stream_converter = codec.start_decoding(key, codec_header, Some(header_buf))?;
+
+    stream_convert_to_completion(stream_converter, input_stream, output_stream,
+                                 file_header.chunk_size as usize)?;
+    if remove_input {
+        fs::remove_file(input_path)?;
+    }
+    Ok(())
+}
+
+
+fn _main() -> Result<(), Error> {
+    if unsafe { libsodium_sys::sodium_init() } < 0 {
+        return Err(MyError::InitError.into());
+    }
+    let opts = parse_command_line()?;
+    for (_file_idx, input_path) in opts.input_paths.iter().enumerate() {
+        let res = match opts.mode {
+            OperationMode::Encrypt => encrypt_file(input_path, &opts),
+            OperationMode::Decrypt => decrypt_file(input_path, &opts),
+        };
+        if let Err(err) = res {
+            eprintln!("{}: {}", PKG_NAME, err);
+        }
+    }
     Ok(())
 }
 
