@@ -1,18 +1,17 @@
-use std::os::raw::c_void;
 use std::convert::TryInto;
+use std::os::raw::c_void;
 
-use failure::{Error};
-use libsodium_sys::{
-    crypto_pwhash_scryptsalsa208sha256_OPSLIMIT_INTERACTIVE,  // u64
-    crypto_pwhash_scryptsalsa208sha256_MEMLIMIT_INTERACTIVE,  // usize
-    randombytes_buf,
-};
 use crate::errors::MyError;
 use crate::header::SCryptSalsa208SHA256Config;
 use crate::types::KeyDerivationFunction;
+use failure::Error;
+use libsodium_sys::{
+    crypto_pwhash_scryptsalsa208sha256_MEMLIMIT_INTERACTIVE, // usize
+    crypto_pwhash_scryptsalsa208sha256_OPSLIMIT_INTERACTIVE, // u64
+    randombytes_buf,
+};
 
 const SCRYPTSALSA208SHA256_SALTBYTES: usize = libsodium_sys::crypto_pwhash_scryptsalsa208sha256_SALTBYTES as usize;
-
 
 pub struct SCryptSalsa208SHA256 {
     opslimit: u64,
@@ -25,14 +24,19 @@ impl SCryptSalsa208SHA256 {
         Ok(SCryptSalsa208SHA256 {
             opslimit: config.opslimit,
             memlimit: config.memlimit,
-            salt: config.salt.as_slice().try_into()  // Check the length is SCRYPTSALSA208SHA256_SALTBYTES
-                .map_err(|_| MyError::InvalidHeader("Invalid salt length for SCryptSalsa208SHA256".into()))?,
+            salt: config
+                .salt
+                .as_slice()
+                .try_into() // Check the length is SCRYPTSALSA208SHA256_SALTBYTES
+                .map_err(|_| {
+                    MyError::InvalidHeader("Invalid salt length for SCryptSalsa208SHA256".into())
+                })?,
         })
     }
 
     pub fn default_config_random_seed() -> SCryptSalsa208SHA256Config {
         let mut salt = vec![0u8; SCRYPTSALSA208SHA256_SALTBYTES];
-        unsafe {randombytes_buf(salt.as_mut_ptr() as *mut c_void, salt.len())};
+        unsafe { randombytes_buf(salt.as_mut_ptr() as *mut c_void, salt.len()) };
 
         SCryptSalsa208SHA256Config {
             salt,

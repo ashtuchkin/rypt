@@ -1,65 +1,60 @@
 use std::convert::TryInto;
 use std::io::{Read, Write};
 
-use failure::{Error};
+use failure::Error;
 use prost::{Message, Oneof};
 
 use crate::errors::MyError;
 
-
 pub const MAX_HEADER_LEN: usize = 1000000;
 const FILE_SIGNATURE: &[u8] = b"enco";
 
-
 #[derive(Clone, PartialEq, Message)]
 pub struct SCryptSalsa208SHA256Config {
-    #[prost(bytes, tag="1")]
+    #[prost(bytes, tag = "1")]
     pub salt: Vec<u8>,
 
-    #[prost(uint64, tag="2")]
+    #[prost(uint64, tag = "2")]
     pub opslimit: u64,
 
-    #[prost(uint64, tag="3")]
+    #[prost(uint64, tag = "3")]
     pub memlimit: u64,
 }
 
 #[derive(Clone, PartialEq, Oneof)]
 pub enum PasswordConfig {
-    #[prost(message, tag="4")]
-    SCryptSalsa208SHA256(SCryptSalsa208SHA256Config)
-
+    #[prost(message, tag = "4")]
+    SCryptSalsa208SHA256(SCryptSalsa208SHA256Config),
 }
-
 
 #[derive(Clone, PartialEq, Message)]
 pub struct AES256GCMConfig {
-    #[prost(bool, tag="1")]
+    #[prost(bool, tag = "1")]
     pub extended_nonce: bool,
 }
 
 #[derive(Clone, PartialEq, Message)]
-pub struct XChaCha20Poly1305Config {
-}
+pub struct XChaCha20Poly1305Config {}
 
 #[derive(Clone, PartialEq, Oneof)]
 pub enum EncodingAlgorithm {
-    #[prost(message, tag="1")]
+    #[prost(message, tag = "1")]
     AES256GCM(AES256GCMConfig),
 
-    #[prost(message, tag="2")]
+    #[prost(message, tag = "2")]
     XChaCha20Poly1305(XChaCha20Poly1305Config),
 }
 
 // Protobuf-encoded file header.
 #[derive(Clone, PartialEq, Message)]
 pub struct FileHeader {
-    #[prost(oneof="EncodingAlgorithm", tags="1,2")]
+    #[prost(oneof = "EncodingAlgorithm", tags = "1,2")]
     pub algorithm: Option<EncodingAlgorithm>,
 
-    #[prost(uint64, tag="3")]
+    #[prost(uint64, tag = "3")]
     pub chunk_size: u64,
 
-    #[prost(oneof="PasswordConfig", tags="4")]
+    #[prost(oneof = "PasswordConfig", tags = "4")]
     pub password_config: Option<PasswordConfig>,
 }
 
@@ -110,5 +105,3 @@ impl FileHeader {
         Ok(header_buf)
     }
 }
-
-

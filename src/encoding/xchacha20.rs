@@ -1,17 +1,17 @@
 use std::os::raw::c_ulonglong;
 
 use crossbeam_channel::{Receiver, Sender};
-use failure::{Error};
+use failure::Error;
 use libsodium_sys::{
-    crypto_secretstream_xchacha20poly1305_state as StreamState,
-    crypto_secretstream_xchacha20poly1305_init_push as init_push,
-    crypto_secretstream_xchacha20poly1305_push as stream_push,
     crypto_secretstream_xchacha20poly1305_init_pull as init_pull,
+    crypto_secretstream_xchacha20poly1305_init_push as init_push,
     crypto_secretstream_xchacha20poly1305_pull as stream_pull,
+    crypto_secretstream_xchacha20poly1305_push as stream_push,
+    crypto_secretstream_xchacha20poly1305_state as StreamState,
 };
 
-use crate::types::{StreamCodec, Chunk, StreamConverter, ChunkConfig, StreamCodecConfig};
 use crate::errors::MyError;
+use crate::types::{Chunk, ChunkConfig, StreamCodec, StreamCodecConfig, StreamConverter};
 
 const ABYTES: usize = libsodium_sys::crypto_secretstream_xchacha20poly1305_ABYTES as usize;
 const KEYBYTES: usize = libsodium_sys::crypto_secretstream_xchacha20poly1305_KEYBYTES as usize;
@@ -23,10 +23,9 @@ pub struct XChaCha20 {}
 
 impl XChaCha20 {
     pub fn new() -> XChaCha20 {
-        XChaCha20{}
+        XChaCha20 {}
     }
 }
-
 
 impl StreamCodec for XChaCha20 {
     fn get_config(&self) -> StreamCodecConfig {
@@ -36,15 +35,23 @@ impl StreamCodec for XChaCha20 {
         }
     }
 
-    fn start_encoding(&self, key: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<(Vec<u8>, Box<StreamConverter>), Error> {
+    fn start_encoding(
+        &self,
+        key: Vec<u8>,
+        authenticate_data: Option<Vec<u8>>,
+    ) -> Result<(Vec<u8>, Box<StreamConverter>), Error> {
         let (converter, header) = XChaCha20Encoder::new(key, authenticate_data)?;
         Ok((header, Box::new(converter)))
     }
 
-    fn start_decoding(&self, key: Vec<u8>, header: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<Box<StreamConverter>, Error> {
+    fn start_decoding(
+        &self,
+        key: Vec<u8>,
+        header: Vec<u8>,
+        authenticate_data: Option<Vec<u8>>,
+    ) -> Result<Box<StreamConverter>, Error> {
         Ok(Box::new(XChaCha20Decoder::new(key, header, authenticate_data)?))
     }
-
 }
 
 pub struct XChaCha20Encoder {
@@ -61,7 +68,13 @@ impl XChaCha20Encoder {
             init_push(&mut state, header.as_mut_ptr(), key.as_ptr()); // NOTE: init_push always succeeds.
             state
         };
-        Ok((XChaCha20Encoder{state, authenticate_data}, header))
+        Ok((
+            XChaCha20Encoder {
+                state,
+                authenticate_data,
+            },
+            header,
+        ))
     }
 }
 
@@ -87,7 +100,7 @@ impl StreamConverter for XChaCha20Encoder {
             unsafe {
                 let (ad_ptr, ad_len) = match self.authenticate_data.take() {
                     Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),
-                    None => (std::ptr::null(), 0 as c_ulonglong)
+                    None => (std::ptr::null(), 0 as c_ulonglong),
                 };
 
                 // NOTE: `stream_push` always succeeds.
@@ -132,7 +145,10 @@ impl XChaCha20Decoder {
             }
             state
         };
-        Ok(XChaCha20Decoder{state, authenticate_data})
+        Ok(XChaCha20Decoder {
+            state,
+            authenticate_data,
+        })
     }
 }
 
@@ -158,7 +174,7 @@ impl StreamConverter for XChaCha20Decoder {
             let rc = unsafe {
                 let (ad_ptr, ad_len) = match self.authenticate_data.take() {
                     Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),
-                    None => (std::ptr::null(), 0 as c_ulonglong)
+                    None => (std::ptr::null(), 0 as c_ulonglong),
                 };
 
                 // NOTE: The buffer is decoded in-place. This is only possible due to the pointer shift
@@ -189,4 +205,3 @@ impl StreamConverter for XChaCha20Decoder {
         Ok(())
     }
 }
-

@@ -1,11 +1,9 @@
-
-
 static SCALES: &[u8; 8] = b"KMGTPEZY";
 
 // E.g. 2 B, 3.54 KB
 pub fn human_file_size(val: usize) -> String {
     let filled_bits = (0usize.leading_zeros() - val.leading_zeros()) as i32;
-    let scale_idx = std::cmp::max(filled_bits - 1, 0) / 10;  // each scale is 10 bits.
+    let scale_idx = std::cmp::max(filled_bits - 1, 0) / 10; // each scale is 10 bits.
     let divider = 2.0f64.powi(scale_idx * 10);
 
     let (scale, places) = if scale_idx == 0 {
@@ -26,16 +24,16 @@ fn human_file_size_test() {
     assert_eq!(human_file_size(1024), "1.00 KB");
     assert_eq!(human_file_size(1100), "1.07 KB");
     assert_eq!(human_file_size(10240), "10.00 KB");
-    assert_eq!(human_file_size(1024*1024), "1.00 MB");
+    assert_eq!(human_file_size(1024 * 1024), "1.00 MB");
     assert_eq!(human_file_size(std::usize::MAX), "16.00 EB");
 }
 
-
 #[allow(dead_code)]
 pub fn to_hex_string(bytes: impl AsRef<[u8]>) -> String {
-    bytes.as_ref().iter()
-       .map(|b| format!("{:02X}", b))
-       .collect::<Vec<String>>()
-       .join("")
+    bytes
+        .as_ref()
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<String>>()
+        .join("")
 }
-

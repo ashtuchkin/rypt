@@ -1,30 +1,27 @@
 use std::os::raw::{c_ulonglong, c_void};
 
 use crossbeam_channel::{Receiver, Sender};
-use failure::{Error};
+use failure::Error;
 use libsodium_sys::{
-    crypto_aead_aes256gcm_encrypt as aes256gcm_encrypt,
-    crypto_aead_aes256gcm_decrypt as aes256gcm_decrypt,
+    crypto_aead_aes256gcm_decrypt as aes256gcm_decrypt, crypto_aead_aes256gcm_encrypt as aes256gcm_encrypt,
     crypto_aead_aes256gcm_is_available as aes256gcm_is_available,
-    crypto_aead_aes256gcm_messagebytes_max as messagebytes_max,
-    crypto_hash_sha512 as hash_sha512,
+    crypto_aead_aes256gcm_messagebytes_max as messagebytes_max, crypto_hash_sha512 as hash_sha512, randombytes_buf,
     sodium_increment,
-    randombytes_buf,
 };
 
-use crate::types::{StreamCodec, Chunk, StreamConverter, ChunkConfig, StreamCodecConfig};
 use crate::errors::MyError;
 use crate::header::AES256GCMConfig;
+use crate::types::{Chunk, ChunkConfig, StreamCodec, StreamCodecConfig, StreamConverter};
 
-const ABYTES: usize = libsodium_sys::crypto_aead_aes256gcm_ABYTES as usize;  // 16
-const KEYBYTES: usize = libsodium_sys::crypto_aead_aes256gcm_KEYBYTES as usize;  // 32
+const ABYTES: usize = libsodium_sys::crypto_aead_aes256gcm_ABYTES as usize; // 16
+const KEYBYTES: usize = libsodium_sys::crypto_aead_aes256gcm_KEYBYTES as usize; // 32
 const NONCE_BYTES: usize = libsodium_sys::crypto_aead_aes256gcm_NPUBBYTES as usize; // 12 (regular nonce length)
 const SHA512_BYTES: usize = libsodium_sys::crypto_hash_sha512_BYTES as usize; // 64 bytes.
 
 const LONG_NONCE_BYTES: usize = 24; // 192 bits should be enough to allow random nonces.
 const MESSAGE_COUNTER_BYTES: usize = 8;
 
-const STATE_BYTES: usize = LONG_NONCE_BYTES + MESSAGE_COUNTER_BYTES + KEYBYTES;  // 64 bytes
+const STATE_BYTES: usize = LONG_NONCE_BYTES + MESSAGE_COUNTER_BYTES + KEYBYTES; // 64 bytes
 
 /*
 This is an implementation of AES256-GCM streaming encoding/decoding with authentication.
@@ -63,16 +60,22 @@ Note that there are several differences with libsodium secretstream construction
 */
 
 fn header_size(extended_nonce: bool) -> usize {
-    if extended_nonce {LONG_NONCE_BYTES} else {NONCE_BYTES}
+    if extended_nonce {
+        LONG_NONCE_BYTES
+    } else {
+        NONCE_BYTES
+    }
 }
 
 pub struct Aes256Gcm {
-    extended_nonce: bool,  // Whether we use nonce extension mechanism, or just random 96-bit nonce.
+    extended_nonce: bool, // Whether we use nonce extension mechanism, or just random 96-bit nonce.
 }
 
 impl Aes256Gcm {
     pub fn new(config: &AES256GCMConfig) -> Aes256Gcm {
-        Aes256Gcm{extended_nonce: config.extended_nonce}
+        Aes256Gcm {
+            extended_nonce: config.extended_nonce,
+        }
     }
 }
 
@@ -84,43 +87,68 @@ impl StreamCodec for Aes256Gcm {
         }
     }
 
-    fn start_encoding(&self, key: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<(Vec<u8>, Box<StreamConverter>), Error> {
+    fn start_encoding(
+        &self,
+        key: Vec<u8>,
+        authenticate_data: Option<Vec<u8>>,
+    ) -> Result<(Vec<u8>, Box<StreamConverter>), Error> {
         let (converter, header) = Aes256GcmEncoder::new(key, authenticate_data, self.extended_nonce)?;
         Ok((header, Box::new(converter)))
     }
 
-    fn start_decoding(&self, key: Vec<u8>, header: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<Box<StreamConverter>, Error> {
-        Ok(Box::new(Aes256GcmDecoder::new(key, header, authenticate_data, self.extended_nonce)?))
+    fn start_decoding(
+        &self,
+        key: Vec<u8>,
+        header: Vec<u8>,
+        authenticate_data: Option<Vec<u8>>,
+    ) -> Result<Box<StreamConverter>, Error> {
+        Ok(Box::new(Aes256GcmDecoder::new(
+            key,
+            header,
+            authenticate_data,
+            self.extended_nonce,
+        )?))
     }
 }
 
 struct Aes256GcmEncoder {
-    state: [u8; STATE_BYTES],  // 32 byte key, 24 byte long nonce, 8 byte counter.
+    state: [u8; STATE_BYTES], // 32 byte key, 24 byte long nonce, 8 byte counter.
     authenticate_data: Option<Vec<u8>>,
     extended_nonce: bool,
 }
 
 impl Aes256GcmEncoder {
-    fn new(key: Vec<u8>, authenticate_data: Option<Vec<u8>>, extended_nonce: bool) -> Result<(Aes256GcmEncoder, Vec<u8>), Error> {
+    fn new(
+        key: Vec<u8>,
+        authenticate_data: Option<Vec<u8>>,
+        extended_nonce: bool,
+    ) -> Result<(Aes256GcmEncoder, Vec<u8>), Error> {
         assert_eq!(key.len(), KEYBYTES);
-        if unsafe {aes256gcm_is_available()} == 0 {
-            return Err(MyError::HardwareUnsupported.into())
+        if unsafe { aes256gcm_is_available() } == 0 {
+            return Err(MyError::HardwareUnsupported.into());
         }
 
         // Create a random nonce.
         let nonce_len = header_size(extended_nonce);
         let mut nonce = vec![0u8; nonce_len];
-        unsafe {randombytes_buf(nonce.as_mut_ptr() as *mut c_void, nonce_len)};
+        unsafe { randombytes_buf(nonce.as_mut_ptr() as *mut c_void, nonce_len) };
 
         // Create algorithm state from long nonce and key. message counter starts with 0.
         let mut state = [0u8; STATE_BYTES];
         state[..KEYBYTES].copy_from_slice(&key);
-        state[KEYBYTES..KEYBYTES+nonce_len].copy_from_slice(&nonce);
+        state[KEYBYTES..KEYBYTES + nonce_len].copy_from_slice(&nonce);
 
         // Header is just the nonce
         let header = nonce;
 
-        Ok((Aes256GcmEncoder{state, extended_nonce, authenticate_data}, header))
+        Ok((
+            Aes256GcmEncoder {
+                state,
+                extended_nonce,
+                authenticate_data,
+            },
+            header,
+        ))
     }
 }
 
@@ -139,7 +167,7 @@ impl StreamConverter for Aes256GcmEncoder {
 
         for mut chunk in input {
             let plaintext_len = chunk.buffer.len();
-            assert!(plaintext_len < unsafe {messagebytes_max()});
+            assert!(plaintext_len < unsafe { messagebytes_max() });
 
             chunk.buffer.resize(plaintext_len + ABYTES, 0);
 
@@ -148,26 +176,27 @@ impl StreamConverter for Aes256GcmEncoder {
                     // Increment counter in the state.
                     sodium_increment(
                         self.state.as_mut_ptr().offset((KEYBYTES + LONG_NONCE_BYTES) as isize),
-                        MESSAGE_COUNTER_BYTES
+                        MESSAGE_COUNTER_BYTES,
                     );
 
                     // Hash state to get the key and nonce for this chunk.
-                    hash_sha512(hash_buf.as_mut_ptr(), self.state.as_ptr(), self.state.len() as c_ulonglong);
+                    hash_sha512(
+                        hash_buf.as_mut_ptr(),
+                        self.state.as_ptr(),
+                        self.state.len() as c_ulonglong,
+                    );
 
                     (hash_buf.as_ptr().offset(KEYBYTES as isize), hash_buf.as_ptr())
                 } else {
                     // Regular nonce: increment it.
-                    sodium_increment(
-                        self.state.as_mut_ptr().offset(KEYBYTES as isize),
-                        NONCE_BYTES
-                    );
+                    sodium_increment(self.state.as_mut_ptr().offset(KEYBYTES as isize), NONCE_BYTES);
 
                     (self.state.as_ptr(), self.state.as_ptr().offset(KEYBYTES as isize))
                 };
 
                 let (ad_ptr, ad_len) = match self.authenticate_data.take() {
                     Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),
-                    None => (std::ptr::null(), 0 as c_ulonglong)
+                    None => (std::ptr::null(), 0 as c_ulonglong),
                 };
 
                 // Use the key and nonce for this chunk. NOTE: Encoding happens in-place.
@@ -191,29 +220,38 @@ impl StreamConverter for Aes256GcmEncoder {
 }
 
 struct Aes256GcmDecoder {
-    state: [u8; STATE_BYTES],  // 8 byte counter, then 24 byte long nonce, then 32 byte key.
+    state: [u8; STATE_BYTES], // 8 byte counter, then 24 byte long nonce, then 32 byte key.
     authenticate_data: Option<Vec<u8>>,
     extended_nonce: bool,
 }
 
 impl Aes256GcmDecoder {
-    fn new(key: Vec<u8>, header: Vec<u8>, authenticate_data: Option<Vec<u8>>, extended_nonce: bool) -> Result<Aes256GcmDecoder, Error> {
+    fn new(
+        key: Vec<u8>,
+        header: Vec<u8>,
+        authenticate_data: Option<Vec<u8>>,
+        extended_nonce: bool,
+    ) -> Result<Aes256GcmDecoder, Error> {
         let nonce_len = header_size(extended_nonce);
         let nonce = header;
         assert_eq!(key.len(), KEYBYTES);
         if nonce.len() != nonce_len {
             return Err(MyError::InvalidHeader("Invalid Aes256Gcm header length".into()).into());
         }
-        if unsafe {aes256gcm_is_available()} == 0 {
-            return Err(MyError::HardwareUnsupported.into())
+        if unsafe { aes256gcm_is_available() } == 0 {
+            return Err(MyError::HardwareUnsupported.into());
         }
 
         // Create algorithm state from long nonce in header and the key. message counter starts with 0.
         let mut state = [0u8; STATE_BYTES];
         state[..KEYBYTES].copy_from_slice(&key);
-        state[KEYBYTES..KEYBYTES+nonce_len].copy_from_slice(&nonce);
+        state[KEYBYTES..KEYBYTES + nonce_len].copy_from_slice(&nonce);
 
-        Ok(Aes256GcmDecoder{state, authenticate_data, extended_nonce})
+        Ok(Aes256GcmDecoder {
+            state,
+            authenticate_data,
+            extended_nonce,
+        })
     }
 }
 
@@ -230,32 +268,33 @@ impl StreamConverter for Aes256GcmDecoder {
         let mut hash_buf = [0u8; SHA512_BYTES];
         for mut chunk in input {
             let ciphertext_len = chunk.buffer.len();
-            assert!(ciphertext_len - ABYTES < unsafe {messagebytes_max()});
+            assert!(ciphertext_len - ABYTES < unsafe { messagebytes_max() });
 
             let rc = unsafe {
                 let (nonce_ptr, key_ptr) = if self.extended_nonce {
                     // Increment counter in the state.
                     sodium_increment(
                         self.state.as_mut_ptr().offset((KEYBYTES + LONG_NONCE_BYTES) as isize),
-                        MESSAGE_COUNTER_BYTES
+                        MESSAGE_COUNTER_BYTES,
                     );
 
                     // Hash state to get the key and nonce for this chunk.
-                    hash_sha512(hash_buf.as_mut_ptr(), self.state.as_ptr(), self.state.len() as c_ulonglong);
+                    hash_sha512(
+                        hash_buf.as_mut_ptr(),
+                        self.state.as_ptr(),
+                        self.state.len() as c_ulonglong,
+                    );
 
                     (hash_buf.as_ptr().offset(KEYBYTES as isize), hash_buf.as_ptr())
                 } else {
                     // Regular nonce: increment it.
-                    sodium_increment(
-                        self.state.as_mut_ptr().offset(KEYBYTES as isize),
-                        NONCE_BYTES
-                    );
+                    sodium_increment(self.state.as_mut_ptr().offset(KEYBYTES as isize), NONCE_BYTES);
 
                     (self.state.as_ptr(), self.state.as_ptr().offset(KEYBYTES as isize))
                 };
                 let (ad_ptr, ad_len) = match self.authenticate_data.take() {
                     Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),
-                    None => (std::ptr::null(), 0 as c_ulonglong)
+                    None => (std::ptr::null(), 0 as c_ulonglong),
                 };
 
                 // NOTE: Encoding happens in-place.

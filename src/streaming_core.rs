@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::io::{Write, Read, ErrorKind};
+use std::io::{ErrorKind, Read, Write};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -7,13 +7,20 @@ use crossbeam_channel::{Receiver, Sender};
 use failure::Error;
 
 use crate::errors::MyError;
-use crate::types::{StreamConverter, ChunkConfig, Chunk};
+use crate::types::{Chunk, ChunkConfig, StreamConverter};
 use crate::util;
 
-
-pub fn stream_convert_to_completion(mut stream_converter: Box<StreamConverter>, input_stream: Box<Read + Send>,
-                                    output_stream: Box<Write + Send>, chunk_size: usize) -> Result<(), Error> {
-    let ChunkConfig {input_chunk_offset, input_chunk_asize, output_chunk_asize} = stream_converter.get_chunk_config();
+pub fn stream_convert_to_completion(
+    mut stream_converter: Box<StreamConverter>,
+    input_stream: Box<Read + Send>,
+    output_stream: Box<Write + Send>,
+    chunk_size: usize,
+) -> Result<(), Error> {
+    let ChunkConfig {
+        input_chunk_offset,
+        input_chunk_asize,
+        output_chunk_asize,
+    } = stream_converter.get_chunk_config();
 
     // Channels
     let (initial_sender, read_receiver) = crossbeam_channel::unbounded();
@@ -29,16 +36,17 @@ pub fn stream_convert_to_completion(mut stream_converter: Box<StreamConverter>, 
 
     // Send initial buffers in to start the pipeline.
     let input_buffer_size = input_chunk_offset + chunk_size + input_chunk_asize;
-    let buffer_capacity = input_chunk_offset + chunk_size +
-        std::cmp::max(input_chunk_asize, output_chunk_asize) + 1;  // +1 byte to allow reader to check Eof
+    let buffer_capacity = input_chunk_offset + chunk_size + std::cmp::max(input_chunk_asize, output_chunk_asize) + 1; // +1 byte to allow reader to check Eof
     for _ in 0..5 {
         let mut buffer = Vec::with_capacity(buffer_capacity);
         buffer.resize(input_buffer_size, 0);
-        initial_sender.send(Chunk {
-            buffer,
-            offset: input_chunk_offset,
-            is_last_chunk: false,
-        }).ok();
+        initial_sender
+            .send(Chunk {
+                buffer,
+                offset: input_chunk_offset,
+                is_last_chunk: false,
+            })
+            .ok();
     }
 
     // Wait while data flows through the pipeline, resupplying used buffers back to the reader.
@@ -47,7 +55,7 @@ pub fn stream_convert_to_completion(mut stream_converter: Box<StreamConverter>, 
         if chunk.buffer.capacity() == buffer_capacity {
             chunk.offset = input_chunk_offset;
             chunk.buffer.resize(input_buffer_size, 0);
-            initial_sender.send(chunk).ok();  // Ok to drop vectors when reading has stopped.
+            initial_sender.send(chunk).ok(); // Ok to drop vectors when reading has stopped.
         }
     }
     std::mem::drop(progress_sender);
@@ -58,7 +66,6 @@ pub fn stream_convert_to_completion(mut stream_converter: Box<StreamConverter>, 
     progress_thread.join().map_err(|_| MyError::ThreadJoinError)?;
     Ok(())
 }
-
 
 fn read_stream(mut input_stream: Box<Read + Send>, input: Receiver<Chunk>, output: Sender<Chunk>) -> Result<(), Error> {
     let mut last_byte = None;
@@ -77,7 +84,6 @@ fn read_stream(mut input_stream: Box<Read + Send>, input: Receiver<Chunk>, outpu
                     if read_bytes > 0 {
                         // Continue reading into the buffer, adjusting the slices.
                         read_ptr += read_bytes;
-
                     } else {
                         // Reached end of file. Send the last chunk.
                         chunk.buffer.truncate(read_ptr);
@@ -85,13 +91,13 @@ fn read_stream(mut input_stream: Box<Read + Send>, input: Receiver<Chunk>, outpu
                         output.send(chunk)?;
                         return Ok(());
                     }
-                },
+                }
                 Err(e) => {
                     if e.kind() != ErrorKind::Interrupted {
                         return Err(e.into());
                     }
                     // Retry when interrupted
-                },
+                }
             }
         }
 
@@ -103,7 +109,11 @@ fn read_stream(mut input_stream: Box<Read + Send>, input: Receiver<Chunk>, outpu
     Err(std::io::Error::from(ErrorKind::NotConnected).into())
 }
 
-fn write_stream(mut output_stream: Box<Write+Send>, input: Receiver<Chunk>, output: Sender<Chunk>) -> Result<(), Error> {
+fn write_stream(
+    mut output_stream: Box<Write + Send>,
+    input: Receiver<Chunk>,
+    output: Sender<Chunk>,
+) -> Result<(), Error> {
     for chunk in input {
         output_stream.write_all(&chunk.buffer[chunk.offset..])?;
         if chunk.is_last_chunk {
@@ -114,11 +124,10 @@ fn write_stream(mut output_stream: Box<Write+Send>, input: Receiver<Chunk>, outp
     Ok(())
 }
 
-
 fn start_progress_thread() -> (Sender<usize>, thread::JoinHandle<()>) {
     let (sender, receiver) = crossbeam_channel::unbounded();
     const PRINT_PERIOD: Duration = Duration::from_millis(100);
-    const SPEED_CALC_PERIOD: Duration = Duration::from_secs(10);  // Calculate speed over the last 5 seconds
+    const SPEED_CALC_PERIOD: Duration = Duration::from_secs(10); // Calculate speed over the last 5 seconds
     const KEEP_STAMPS_COUNT: usize = (SPEED_CALC_PERIOD.as_millis() / PRINT_PERIOD.as_millis()) as usize;
     let print_ticker = crossbeam_channel::tick(PRINT_PERIOD);
     let start_time = Instant::now();
@@ -146,7 +155,6 @@ fn start_progress_thread() -> (Sender<usize>, thread::JoinHandle<()>) {
                 util::human_file_size(end_period_progress),
                 util::human_file_size(speed),
                 human_readable_duration(Instant::now() - start_time),
-
             );
             if final_print && has_ever_printed {
                 eprintln!();
