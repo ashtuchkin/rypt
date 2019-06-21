@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, VecDeque};
+#![warn(clippy::all)]
+
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{stdin, stdout, Read, Write};
 use std::path::{Path, PathBuf};
@@ -20,9 +22,11 @@ mod streaming_core;
 mod types;
 mod util;
 
-// See https://stackoverflow.com/a/27841363 for full list.
-const PKG_VERSION: &'static str = env!("CARGO_PKG_VERSION");
-const PKG_NAME: &'static str = env!("CARGO_PKG_NAME");
+// See https://stackoverflow.com/a/27841363 for the full list.
+const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+
+const DEFAULT_FILE_SUFFIX: &str = "rypt";
 
 #[derive(Debug, Copy, Clone)]
 enum OperationMode {
@@ -50,10 +54,9 @@ struct Options {
     verbose: i32,
 }
 
-fn open_streams(
-    input_path: &Path,
-    output_path: &Path,
-) -> Result<(Box<Read + Send>, Box<Write + Send>, Option<usize>), Error> {
+type StreamsAndFileSize = (Box<Read + Send>, Box<Write + Send>, Option<usize>);
+
+fn open_streams(input_path: &Path, output_path: &Path) -> Result<StreamsAndFileSize, Error> {
     let filesize = match input_path.to_str() {
         Some("-") => None,
         _ => Some(std::fs::metadata(&input_path)?.len() as usize),
@@ -77,7 +80,8 @@ fn derive_key_from_password(
     password: &Option<String>,
 ) -> Result<Vec<u8>, Error> {
     if let Some(password) = password {
-        Ok(registry::key_derivation_from_header(&file_header)?.derive_key_from_password(&password, key_size)?)
+        Ok(registry::key_derivation_from_header(&file_header)?
+            .derive_key_from_password(&password, key_size)?)
     } else {
         Err(MyError::PasswordRequired.into())
     }
@@ -93,9 +97,22 @@ fn parse_command_line() -> Result<Options, Error> {
         .optflag("d", "decrypt", "force decryption mode")
         .optopt("p", "password", "provide password", "PASSWORD")
         .optopt("a", "algorithm", "choose algorithm for encryption", "ALG")
-        .optflag("s", "stdout", "write to standard output and don't delete input files")
-        .optopt("S", "suffix", "encrypted file suffix, defaults to .enc", ".suf")
-        .optflagmulti("v", "verbose", "be verbose; specify twice for even more verbose")
+        .optflag(
+            "s",
+            "stdout",
+            "write to standard output and don't delete input files",
+        )
+        .optopt(
+            "S",
+            "suffix",
+            "encrypted file suffix, defaults to .enc",
+            ".suf",
+        )
+        .optflagmulti(
+            "v",
+            "verbose",
+            "be verbose; specify twice for even more verbose",
+        )
         .optflag("h", "help", "display this short help and exit")
         .optflag("V", "version", "display the version numbers and exit");
 
@@ -122,31 +139,27 @@ Home page and documentation: <https://github.com/ashtuchkin/xxx>",
         std::process::exit(0);
     } else if matches.opt_present("V") {
         println!("{} {}", PKG_NAME, PKG_VERSION);
-        let libsodium_version = unsafe { std::ffi::CStr::from_ptr(libsodium_sys::sodium_version_string()) };
+        let libsodium_version =
+            unsafe { std::ffi::CStr::from_ptr(libsodium_sys::sodium_version_string()) };
         println!("libsodium {}", libsodium_version.to_str()?);
         std::process::exit(0);
     }
 
-    // Figure out the mode - it's the last mode-related argument, or Encrypt by default.
-    let mut all_modes: BTreeMap<usize, OperationMode> = BTreeMap::new();
-    all_modes.extend(
-        matches
-            .opt_positions("e")
-            .into_iter()
-            .map(|p| (p, OperationMode::Encrypt)),
-    );
-    all_modes.extend(
-        matches
-            .opt_positions("d")
-            .into_iter()
-            .map(|p| (p, OperationMode::Decrypt)),
-    );
+    // Figure out the mode: use the last mode-related argument, or Encrypt by default.
+    const MODES: &[(&str, OperationMode); 2] =
+        &[("e", OperationMode::Encrypt), ("d", OperationMode::Decrypt)];
 
-    let mode = all_modes
-        .values()
-        .next_back()
-        .copied()
-        .unwrap_or(OperationMode::Encrypt);
+    let mode: OperationMode = MODES
+        .iter()
+        .flat_map(|(cmdline_arg, mode)| {
+            matches
+                .opt_positions(cmdline_arg)
+                .into_iter()
+                .map(move |pos| (pos, *mode))
+        })
+        .max_by_key(|(pos, _)| *pos)
+        .unwrap_or((0, OperationMode::Encrypt))
+        .1;
 
     // Figure out the input paths.
     let input_paths = if matches.free.is_empty() {
@@ -160,7 +173,11 @@ Home page and documentation: <https://github.com/ashtuchkin/xxx>",
         stdin_is_tty,
         stdout_is_tty,
         input_paths,
-        suffix: OsString::from(matches.opt_default("S", "enc").unwrap_or("enc".into())),
+        suffix: OsString::from(
+            matches
+                .opt_str("S")
+                .unwrap_or_else(|| DEFAULT_FILE_SUFFIX.into()),
+        ),
         password: matches.opt_str("p"),
         algorithm: matches.opt_str("a"),
         verbose: matches.opt_count("v") as i32,
@@ -175,7 +192,7 @@ fn encrypt_file(input_path: &PathBuf, opts: &Options) -> Result<(), Error> {
         (PathBuf::from("-"), false)
     } else {
         let mut new_ext = input_path.extension().unwrap_or_default().to_os_string();
-        if !opts.suffix.to_str().unwrap_or_default().starts_with(".") {
+        if !opts.suffix.to_str().unwrap_or_default().starts_with('.') {
             new_ext.push(OsString::from("."));
         }
         new_ext.push(&opts.suffix);
@@ -215,7 +232,10 @@ fn decrypt_file(input_path: &PathBuf, opts: &Options) -> Result<(), Error> {
         (PathBuf::from("-"), false)
     } else {
         if input_path.extension() != Some(&opts.suffix) {
-            bail!("{:?}: Filename has an unknown suffix, skipping.", input_path);
+            bail!(
+                "{:?}: Filename has an unknown suffix, skipping.",
+                input_path
+            );
         }
         (input_path.with_extension(""), true)
     };

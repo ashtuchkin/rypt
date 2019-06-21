@@ -6,7 +6,7 @@ use prost::{Message, Oneof};
 
 use crate::errors::MyError;
 
-pub const MAX_HEADER_LEN: usize = 1000000;
+pub const MAX_HEADER_LEN: usize = 1_000_000;
 const FILE_SIGNATURE: &[u8] = b"enco";
 
 #[derive(Clone, PartialEq, Message)]
@@ -78,7 +78,7 @@ impl FileHeader {
         reader.read_exact(&mut header_buf)?;
 
         // 3. Decode header protobuf.
-        let file_header = FileHeader::decode(&header_buf).map_err(|e| MyError::InvalidHeaderProto(e))?;
+        let file_header = FileHeader::decode(&header_buf).map_err(MyError::InvalidHeaderProto)?;
 
         // Return both decoded file header and the original buffer; the latter will be authenticated
         // later. Note, we don't need to authenticate preheader.

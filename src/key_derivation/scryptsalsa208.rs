@@ -21,16 +21,16 @@ pub struct SCryptSalsa208SHA256 {
 
 impl SCryptSalsa208SHA256 {
     pub fn new(config: &SCryptSalsa208SHA256Config) -> Result<Self, Error> {
+        let salt = config.salt.as_slice()
+            .try_into() // Check the length is SCRYPTSALSA208SHA256_SALTBYTES
+            .map_err(|_| {
+                MyError::InvalidHeader("Invalid salt length for SCryptSalsa208SHA256".into())
+            })?;
+
         Ok(SCryptSalsa208SHA256 {
             opslimit: config.opslimit,
             memlimit: config.memlimit,
-            salt: config
-                .salt
-                .as_slice()
-                .try_into() // Check the length is SCRYPTSALSA208SHA256_SALTBYTES
-                .map_err(|_| {
-                    MyError::InvalidHeader("Invalid salt length for SCryptSalsa208SHA256".into())
-                })?,
+            salt,
         })
     }
 
@@ -40,8 +40,8 @@ impl SCryptSalsa208SHA256 {
 
         SCryptSalsa208SHA256Config {
             salt,
-            opslimit: crypto_pwhash_scryptsalsa208sha256_OPSLIMIT_INTERACTIVE as u64,
-            memlimit: crypto_pwhash_scryptsalsa208sha256_MEMLIMIT_INTERACTIVE as u64,
+            opslimit: u64::from(crypto_pwhash_scryptsalsa208sha256_OPSLIMIT_INTERACTIVE),
+            memlimit: u64::from(crypto_pwhash_scryptsalsa208sha256_MEMLIMIT_INTERACTIVE),
         }
     }
 }

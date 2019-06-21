@@ -109,9 +109,9 @@ impl StreamConverter for XChaCha20Encoder {
                 // and the fact that crypto_stream_chacha20_ietf_xor_ic can do encryption in-place: https://libsodium.gitbook.io/doc/advanced/stream_ciphers/xchacha20#usage)
                 stream_push(
                     &mut self.state,
-                    chunk.buffer.as_mut_ptr().offset((chunk.offset - PREFIX_SIZE) as isize),
+                    chunk.buffer.as_mut_ptr().add(chunk.offset - PREFIX_SIZE),
                     std::ptr::null_mut(),
-                    chunk.buffer.as_ptr().offset(chunk.offset as isize),
+                    chunk.buffer.as_ptr().add(chunk.offset),
                     plaintext_len as c_ulonglong,
                     ad_ptr,
                     ad_len,
@@ -182,10 +182,10 @@ impl StreamConverter for XChaCha20Decoder {
                 // and the fact that crypto_stream_chacha20_ietf_xor_ic can do encryption in-place: https://libsodium.gitbook.io/doc/advanced/stream_ciphers/xchacha20#usage)
                 stream_pull(
                     &mut self.state,
-                    chunk.buffer.as_mut_ptr().offset((chunk.offset + PREFIX_SIZE) as isize),
+                    chunk.buffer.as_mut_ptr().add(chunk.offset + PREFIX_SIZE),
                     std::ptr::null_mut(),
                     &mut tag,
-                    chunk.buffer.as_ptr().offset(chunk.offset as isize),
+                    chunk.buffer.as_ptr().add(chunk.offset),
                     chunk_size as c_ulonglong,
                     ad_ptr,
                     ad_len,

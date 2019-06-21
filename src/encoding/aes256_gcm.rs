@@ -140,15 +140,12 @@ impl Aes256GcmEncoder {
 
         // Header is just the nonce
         let header = nonce;
-
-        Ok((
-            Aes256GcmEncoder {
-                state,
-                extended_nonce,
-                authenticate_data,
-            },
-            header,
-        ))
+        let encoder = Aes256GcmEncoder {
+            state,
+            extended_nonce,
+            authenticate_data,
+        };
+        Ok((encoder, header))
     }
 }
 
@@ -161,6 +158,7 @@ impl StreamConverter for Aes256GcmEncoder {
         }
     }
 
+    #[allow(clippy::assertions_on_constants)]
     fn convert_blocking(&mut self, input: Receiver<Chunk>, output: Sender<Chunk>) -> Result<(), Error> {
         assert!(SHA512_BYTES > KEYBYTES + NONCE_BYTES);
         let mut hash_buf = [0u8; SHA512_BYTES];
@@ -175,7 +173,7 @@ impl StreamConverter for Aes256GcmEncoder {
                 let (nonce_ptr, key_ptr) = if self.extended_nonce {
                     // Increment counter in the state.
                     sodium_increment(
-                        self.state.as_mut_ptr().offset((KEYBYTES + LONG_NONCE_BYTES) as isize),
+                        self.state.as_mut_ptr().add(KEYBYTES + LONG_NONCE_BYTES),
                         MESSAGE_COUNTER_BYTES,
                     );
 
@@ -186,12 +184,12 @@ impl StreamConverter for Aes256GcmEncoder {
                         self.state.len() as c_ulonglong,
                     );
 
-                    (hash_buf.as_ptr().offset(KEYBYTES as isize), hash_buf.as_ptr())
+                    (hash_buf.as_ptr().add(KEYBYTES), hash_buf.as_ptr())
                 } else {
                     // Regular nonce: increment it.
-                    sodium_increment(self.state.as_mut_ptr().offset(KEYBYTES as isize), NONCE_BYTES);
+                    sodium_increment(self.state.as_mut_ptr().add(KEYBYTES), NONCE_BYTES);
 
-                    (self.state.as_ptr(), self.state.as_ptr().offset(KEYBYTES as isize))
+                    (self.state.as_ptr(), self.state.as_ptr().add(KEYBYTES))
                 };
 
                 let (ad_ptr, ad_len) = match self.authenticate_data.take() {
@@ -274,7 +272,7 @@ impl StreamConverter for Aes256GcmDecoder {
                 let (nonce_ptr, key_ptr) = if self.extended_nonce {
                     // Increment counter in the state.
                     sodium_increment(
-                        self.state.as_mut_ptr().offset((KEYBYTES + LONG_NONCE_BYTES) as isize),
+                        self.state.as_mut_ptr().add(KEYBYTES + LONG_NONCE_BYTES),
                         MESSAGE_COUNTER_BYTES,
                     );
 
@@ -285,12 +283,12 @@ impl StreamConverter for Aes256GcmDecoder {
                         self.state.len() as c_ulonglong,
                     );
 
-                    (hash_buf.as_ptr().offset(KEYBYTES as isize), hash_buf.as_ptr())
+                    (hash_buf.as_ptr().add(KEYBYTES), hash_buf.as_ptr())
                 } else {
                     // Regular nonce: increment it.
-                    sodium_increment(self.state.as_mut_ptr().offset(KEYBYTES as isize), NONCE_BYTES);
+                    sodium_increment(self.state.as_mut_ptr().add(KEYBYTES), NONCE_BYTES);
 
-                    (self.state.as_ptr(), self.state.as_ptr().offset(KEYBYTES as isize))
+                    (self.state.as_ptr(), self.state.as_ptr().add(KEYBYTES))
                 };
                 let (ad_ptr, ad_len) = match self.authenticate_data.take() {
                     Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),

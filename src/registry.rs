@@ -10,7 +10,7 @@ pub fn header_from_command_line(algorithm: &Option<String>, chunk_size: &Option<
     // Start with default values.
     let mut header = FileHeader {
         algorithm: Some(EncodingAlgorithm::XChaCha20Poly1305(XChaCha20Poly1305Config {})),
-        chunk_size: 1 * 1024 * 1024,
+        chunk_size: 1024 * 1024,
         password_config: Some(PasswordConfig::SCryptSalsa208SHA256(
             SCryptSalsa208SHA256::default_config_random_seed(),
         )),
