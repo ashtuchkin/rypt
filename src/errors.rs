@@ -27,7 +27,10 @@ pub enum MyError {
     #[fail(display = "Encoding algorithm is unsupported by this CPU")]
     HardwareUnsupported,
 
-    #[fail(display = "Header is too large ({} bytes, maximum allowed {} bytes)", _0, _1)]
+    #[fail(
+        display = "Header is too large ({} bytes, maximum allowed {} bytes)",
+        _0, _1
+    )]
     EncodingError(usize, usize),
 
     #[fail(display = "Failed to derive key from password (invalid parameters?)")]

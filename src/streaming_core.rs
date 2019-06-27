@@ -4,9 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
-use failure::Error;
+use failure::Fallible;
 
 use crate::errors::MyError;
+use crate::runtime_env::RuntimeEnvironment;
 use crate::types::{Chunk, ChunkConfig, StreamConverter};
 use crate::util;
 
@@ -15,7 +16,8 @@ pub fn stream_convert_to_completion(
     input_stream: Box<Read + Send>,
     output_stream: Box<Write + Send>,
     chunk_size: usize,
-) -> Result<(), Error> {
+    env: &RuntimeEnvironment,
+) -> Fallible<()> {
     let ChunkConfig {
         input_chunk_offset,
         input_chunk_asize,
@@ -29,14 +31,17 @@ pub fn stream_convert_to_completion(
     let (write_sender, final_receiver) = crossbeam_channel::unbounded();
 
     // Threads
-    let (progress_sender, progress_thread) = start_progress_thread();
+    let (progress_sender, progress_thread) = start_progress_thread(env);
     let read_thread = thread::spawn(move || read_stream(input_stream, read_receiver, read_sender));
-    let codec_thread = thread::spawn(move || stream_converter.convert_blocking(codec_receiver, codec_sender));
-    let write_thread = thread::spawn(move || write_stream(output_stream, write_receiver, write_sender));
+    let codec_thread =
+        thread::spawn(move || stream_converter.convert_blocking(codec_receiver, codec_sender));
+    let write_thread =
+        thread::spawn(move || write_stream(output_stream, write_receiver, write_sender));
 
     // Send initial buffers in to start the pipeline.
     let input_buffer_size = input_chunk_offset + chunk_size + input_chunk_asize;
-    let buffer_capacity = input_chunk_offset + chunk_size + std::cmp::max(input_chunk_asize, output_chunk_asize) + 1; // +1 byte to allow reader to check Eof
+    let buffer_capacity =
+        input_chunk_offset + chunk_size + std::cmp::max(input_chunk_asize, output_chunk_asize) + 1; // +1 byte to allow reader to check Eof
     for _ in 0..5 {
         let mut buffer = Vec::with_capacity(buffer_capacity);
         buffer.resize(input_buffer_size, 0);
@@ -60,14 +65,24 @@ pub fn stream_convert_to_completion(
     }
     std::mem::drop(progress_sender);
 
-    write_thread.join().map_err(|_| MyError::ThreadJoinError)??;
-    codec_thread.join().map_err(|_| MyError::ThreadJoinError)??;
+    write_thread
+        .join()
+        .map_err(|_| MyError::ThreadJoinError)??;
+    codec_thread
+        .join()
+        .map_err(|_| MyError::ThreadJoinError)??;
     read_thread.join().map_err(|_| MyError::ThreadJoinError)??;
-    progress_thread.join().map_err(|_| MyError::ThreadJoinError)?;
+    progress_thread
+        .join()
+        .map_err(|_| MyError::ThreadJoinError)?;
     Ok(())
 }
 
-fn read_stream(mut input_stream: Box<Read + Send>, input: Receiver<Chunk>, output: Sender<Chunk>) -> Result<(), Error> {
+fn read_stream(
+    mut input_stream: Box<Read + Send>,
+    input: Receiver<Chunk>,
+    output: Sender<Chunk>,
+) -> Fallible<()> {
     let mut last_byte = None;
     for mut chunk in input {
         chunk.buffer.push(0); // Add one byte to allow determining final chunk.
@@ -113,7 +128,7 @@ fn write_stream(
     mut output_stream: Box<Write + Send>,
     input: Receiver<Chunk>,
     output: Sender<Chunk>,
-) -> Result<(), Error> {
+) -> Fallible<()> {
     for chunk in input {
         output_stream.write_all(&chunk.buffer[chunk.offset..])?;
         if chunk.is_last_chunk {
@@ -124,11 +139,12 @@ fn write_stream(
     Ok(())
 }
 
-fn start_progress_thread() -> (Sender<usize>, thread::JoinHandle<()>) {
+fn start_progress_thread(_env: &RuntimeEnvironment) -> (Sender<usize>, thread::JoinHandle<()>) {
     let (sender, receiver) = crossbeam_channel::unbounded();
     const PRINT_PERIOD: Duration = Duration::from_millis(100);
     const SPEED_CALC_PERIOD: Duration = Duration::from_secs(10); // Calculate speed over the last 5 seconds
-    const KEEP_STAMPS_COUNT: usize = (SPEED_CALC_PERIOD.as_millis() / PRINT_PERIOD.as_millis()) as usize;
+    const KEEP_STAMPS_COUNT: usize =
+        (SPEED_CALC_PERIOD.as_millis() / PRINT_PERIOD.as_millis()) as usize;
     let print_ticker = crossbeam_channel::tick(PRINT_PERIOD);
     let start_time = Instant::now();
     let mut cur_progress = 0usize;
@@ -149,15 +165,18 @@ fn start_progress_thread() -> (Sender<usize>, thread::JoinHandle<()>) {
         let delta_progress = end_period_progress - start_period_progress;
         if delta_time > 0 && delta_progress > 0 {
             let speed = delta_progress * 1000 / delta_time;
-            eprint!(
+            let mut stderr = std::io::stderr();
+            write!(
+                stderr,
                 "\r{}Progress: {}, Speed: {}/s, Time: {}",
                 termion::clear::CurrentLine,
                 util::human_file_size(end_period_progress),
                 util::human_file_size(speed),
                 human_readable_duration(Instant::now() - start_time),
-            );
+            )
+            .ok();
             if final_print && has_ever_printed {
-                eprintln!();
+                writeln!(stderr).ok();
             }
             has_ever_printed = true;
         }

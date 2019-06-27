@@ -1,17 +1,19 @@
 use std::convert::TryInto;
 use std::os::raw::c_void;
 
-use crate::errors::MyError;
-use crate::header::SCryptSalsa208SHA256Config;
-use crate::types::KeyDerivationFunction;
-use failure::Error;
+use failure::Fallible;
 use libsodium_sys::{
     crypto_pwhash_scryptsalsa208sha256_MEMLIMIT_INTERACTIVE, // usize
     crypto_pwhash_scryptsalsa208sha256_OPSLIMIT_INTERACTIVE, // u64
     randombytes_buf,
 };
 
-const SCRYPTSALSA208SHA256_SALTBYTES: usize = libsodium_sys::crypto_pwhash_scryptsalsa208sha256_SALTBYTES as usize;
+use crate::errors::MyError;
+use crate::header::SCryptSalsa208SHA256Config;
+use crate::types::KeyDerivationFunction;
+
+const SCRYPTSALSA208SHA256_SALTBYTES: usize =
+    libsodium_sys::crypto_pwhash_scryptsalsa208sha256_SALTBYTES as usize;
 
 pub struct SCryptSalsa208SHA256 {
     opslimit: u64,
@@ -20,7 +22,7 @@ pub struct SCryptSalsa208SHA256 {
 }
 
 impl SCryptSalsa208SHA256 {
-    pub fn new(config: &SCryptSalsa208SHA256Config) -> Result<Self, Error> {
+    pub fn new(config: &SCryptSalsa208SHA256Config) -> Fallible<Self> {
         let salt = config.salt.as_slice()
             .try_into() // Check the length is SCRYPTSALSA208SHA256_SALTBYTES
             .map_err(|_| {
@@ -47,7 +49,7 @@ impl SCryptSalsa208SHA256 {
 }
 
 impl KeyDerivationFunction for SCryptSalsa208SHA256 {
-    fn derive_key_from_password(&self, password: &str, key_len: usize) -> Result<Vec<u8>, Error> {
+    fn derive_key_from_password(&self, password: &str, key_len: usize) -> Fallible<Vec<u8>> {
         let mut out_key = vec![0u8; key_len];
         let rc = unsafe {
             libsodium_sys::crypto_pwhash_scryptsalsa208sha256(

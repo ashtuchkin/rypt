@@ -1,7 +1,7 @@
 use std::os::raw::c_ulonglong;
 
 use crossbeam_channel::{Receiver, Sender};
-use failure::Error;
+use failure::Fallible;
 use libsodium_sys::{
     crypto_secretstream_xchacha20poly1305_init_pull as init_pull,
     crypto_secretstream_xchacha20poly1305_init_push as init_push,
@@ -15,7 +15,8 @@ use crate::types::{Chunk, ChunkConfig, StreamCodec, StreamCodecConfig, StreamCon
 
 const ABYTES: usize = libsodium_sys::crypto_secretstream_xchacha20poly1305_ABYTES as usize;
 const KEYBYTES: usize = libsodium_sys::crypto_secretstream_xchacha20poly1305_KEYBYTES as usize;
-const HEADERBYTES: usize = libsodium_sys::crypto_secretstream_xchacha20poly1305_HEADERBYTES as usize;
+const HEADERBYTES: usize =
+    libsodium_sys::crypto_secretstream_xchacha20poly1305_HEADERBYTES as usize;
 const TAG_MESSAGE: u8 = libsodium_sys::crypto_secretstream_xchacha20poly1305_TAG_MESSAGE as u8;
 const TAG_FINAL: u8 = libsodium_sys::crypto_secretstream_xchacha20poly1305_TAG_FINAL as u8;
 
@@ -39,7 +40,7 @@ impl StreamCodec for XChaCha20 {
         &self,
         key: Vec<u8>,
         authenticate_data: Option<Vec<u8>>,
-    ) -> Result<(Vec<u8>, Box<StreamConverter>), Error> {
+    ) -> Fallible<(Vec<u8>, Box<StreamConverter>)> {
         let (converter, header) = XChaCha20Encoder::new(key, authenticate_data)?;
         Ok((header, Box::new(converter)))
     }
@@ -49,8 +50,12 @@ impl StreamCodec for XChaCha20 {
         key: Vec<u8>,
         header: Vec<u8>,
         authenticate_data: Option<Vec<u8>>,
-    ) -> Result<Box<StreamConverter>, Error> {
-        Ok(Box::new(XChaCha20Decoder::new(key, header, authenticate_data)?))
+    ) -> Fallible<Box<StreamConverter>> {
+        Ok(Box::new(XChaCha20Decoder::new(
+            key,
+            header,
+            authenticate_data,
+        )?))
     }
 }
 
@@ -60,7 +65,10 @@ pub struct XChaCha20Encoder {
 }
 
 impl XChaCha20Encoder {
-    fn new(key: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<(XChaCha20Encoder, Vec<u8>), Error> {
+    fn new(
+        key: Vec<u8>,
+        authenticate_data: Option<Vec<u8>>,
+    ) -> Fallible<(XChaCha20Encoder, Vec<u8>)> {
         assert_eq!(key.len(), KEYBYTES);
         let mut header = vec![0u8; HEADERBYTES];
         let state: StreamState = unsafe {
@@ -87,7 +95,7 @@ impl StreamConverter for XChaCha20Encoder {
         }
     }
 
-    fn convert_blocking(&mut self, input: Receiver<Chunk>, output: Sender<Chunk>) -> Result<(), Error> {
+    fn convert_blocking(&mut self, input: Receiver<Chunk>, output: Sender<Chunk>) -> Fallible<()> {
         for mut chunk in input {
             const PREFIX_SIZE: usize = 1;
             const SUFFIX_SIZE: usize = ABYTES - PREFIX_SIZE;
@@ -95,14 +103,15 @@ impl StreamConverter for XChaCha20Encoder {
 
             let plaintext_len = chunk.buffer.len() - chunk.offset;
             chunk.buffer.resize(chunk.buffer.len() + SUFFIX_SIZE, 0);
-            let tag = if chunk.is_last_chunk { TAG_FINAL } else { TAG_MESSAGE } as u8;
+            let tag = if chunk.is_last_chunk {
+                TAG_FINAL
+            } else {
+                TAG_MESSAGE
+            } as u8;
+
+            let adata = self.authenticate_data.take().unwrap_or_default();
 
             unsafe {
-                let (ad_ptr, ad_len) = match self.authenticate_data.take() {
-                    Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),
-                    None => (std::ptr::null(), 0 as c_ulonglong),
-                };
-
                 // NOTE: `stream_push` always succeeds.
                 // NOTE: The buffer is encoded in-place. This is only possible due to the pointer shift
                 // made by PREFIX_SIZE. (see function's internals at https://github.com/jedisct1/libsodium/blob/1.0.18/src/libsodium/crypto_secretstream/xchacha20poly1305/secretstream_xchacha20poly1305.c#L147
@@ -113,8 +122,8 @@ impl StreamConverter for XChaCha20Encoder {
                     std::ptr::null_mut(),
                     chunk.buffer.as_ptr().add(chunk.offset),
                     plaintext_len as c_ulonglong,
-                    ad_ptr,
-                    ad_len,
+                    adata.as_ptr(),
+                    adata.len() as c_ulonglong,
                     tag,
                 );
             }
@@ -131,7 +140,11 @@ pub struct XChaCha20Decoder {
 }
 
 impl XChaCha20Decoder {
-    fn new(key: Vec<u8>, header: Vec<u8>, authenticate_data: Option<Vec<u8>>) -> Result<XChaCha20Decoder, Error> {
+    fn new(
+        key: Vec<u8>,
+        header: Vec<u8>,
+        authenticate_data: Option<Vec<u8>>,
+    ) -> Fallible<XChaCha20Decoder> {
         assert_eq!(key.len(), KEYBYTES);
         if header.len() != HEADERBYTES {
             return Err(MyError::InvalidHeader("Invalid XChacha20 header length".into()).into());
@@ -161,7 +174,7 @@ impl StreamConverter for XChaCha20Decoder {
         }
     }
 
-    fn convert_blocking(&mut self, input: Receiver<Chunk>, output: Sender<Chunk>) -> Result<(), Error> {
+    fn convert_blocking(&mut self, input: Receiver<Chunk>, output: Sender<Chunk>) -> Fallible<()> {
         for mut chunk in input {
             const PREFIX_SIZE: usize = 1;
             const SUFFIX_SIZE: usize = ABYTES - PREFIX_SIZE;
@@ -170,13 +183,9 @@ impl StreamConverter for XChaCha20Decoder {
                 return Err(MyError::DecryptionError("Chunk too small to be valid".into()).into());
             }
             let mut tag: u8 = unsafe { std::mem::zeroed() };
+            let adata = self.authenticate_data.take().unwrap_or_default();
 
             let rc = unsafe {
-                let (ad_ptr, ad_len) = match self.authenticate_data.take() {
-                    Some(adata) => (adata.as_ptr(), adata.len() as c_ulonglong),
-                    None => (std::ptr::null(), 0 as c_ulonglong),
-                };
-
                 // NOTE: The buffer is decoded in-place. This is only possible due to the pointer shift
                 // made by PREFIX_SIZE. (see function's internals at https://github.com/jedisct1/libsodium/blob/1.0.18/src/libsodium/crypto_secretstream/xchacha20poly1305/secretstream_xchacha20poly1305.c#L147
                 // and the fact that crypto_stream_chacha20_ietf_xor_ic can do encryption in-place: https://libsodium.gitbook.io/doc/advanced/stream_ciphers/xchacha20#usage)
@@ -187,8 +196,8 @@ impl StreamConverter for XChaCha20Decoder {
                     &mut tag,
                     chunk.buffer.as_ptr().add(chunk.offset),
                     chunk_size as c_ulonglong,
-                    ad_ptr,
-                    ad_len,
+                    adata.as_ptr(),
+                    adata.len() as c_ulonglong,
                 )
             };
             if rc != 0 {

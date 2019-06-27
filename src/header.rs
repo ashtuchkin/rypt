@@ -1,7 +1,7 @@
 use std::convert::TryInto;
 use std::io::{Read, Write};
 
-use failure::Error;
+use failure::Fallible;
 use prost::{Message, Oneof};
 
 use crate::errors::MyError;
@@ -59,7 +59,7 @@ pub struct FileHeader {
 }
 
 impl FileHeader {
-    pub fn read(reader: &mut Read) -> Result<(FileHeader, Vec<u8>), Error> {
+    pub fn read(reader: &mut Read) -> Fallible<(FileHeader, Vec<u8>)> {
         // 1. Get 8 bytes pre-header that contains file signature (4 ASCII chars 'enco') and header
         //    length (little endian u32).
         let mut preheader_buf = vec![0u8; FILE_SIGNATURE.len() + std::mem::size_of::<u32>()];
@@ -68,7 +68,8 @@ impl FileHeader {
             return Err(MyError::InvalidHeader("Invalid signature".into()).into());
         }
 
-        let header_len = u32::from_le_bytes(preheader_buf[FILE_SIGNATURE.len()..].try_into()?) as usize;
+        let header_len =
+            u32::from_le_bytes(preheader_buf[FILE_SIGNATURE.len()..].try_into()?) as usize;
         if header_len > MAX_HEADER_LEN {
             return Err(MyError::InvalidHeader("Header too large".into()).into());
         }
@@ -85,7 +86,7 @@ impl FileHeader {
         Ok((file_header, header_buf))
     }
 
-    pub fn write(&self, writer: &mut Write) -> Result<Vec<u8>, Error> {
+    pub fn write(&self, writer: &mut Write) -> Fallible<Vec<u8>> {
         // 1. Encode header into buf
         let header_len = self.encoded_len();
         if header_len > MAX_HEADER_LEN {

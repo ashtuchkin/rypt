@@ -1,15 +1,22 @@
-use failure::Error;
+use failure::Fallible;
 
 use crate::encoding::{Aes256Gcm, XChaCha20};
 use crate::errors::MyError;
-use crate::header::{AES256GCMConfig, EncodingAlgorithm, FileHeader, PasswordConfig, XChaCha20Poly1305Config};
+use crate::header::{
+    AES256GCMConfig, EncodingAlgorithm, FileHeader, PasswordConfig, XChaCha20Poly1305Config,
+};
 use crate::key_derivation::SCryptSalsa208SHA256;
 use crate::types::{KeyDerivationFunction, StreamCodec};
 
-pub fn header_from_command_line(algorithm: &Option<String>, chunk_size: &Option<usize>) -> Result<FileHeader, Error> {
+pub fn header_from_command_line(
+    algorithm: &Option<String>,
+    chunk_size: &Option<usize>,
+) -> Fallible<FileHeader> {
     // Start with default values.
     let mut header = FileHeader {
-        algorithm: Some(EncodingAlgorithm::XChaCha20Poly1305(XChaCha20Poly1305Config {})),
+        algorithm: Some(EncodingAlgorithm::XChaCha20Poly1305(
+            XChaCha20Poly1305Config {},
+        )),
         chunk_size: 1024 * 1024,
         password_config: Some(PasswordConfig::SCryptSalsa208SHA256(
             SCryptSalsa208SHA256::default_config_random_seed(),
@@ -19,8 +26,12 @@ pub fn header_from_command_line(algorithm: &Option<String>, chunk_size: &Option<
     if let Some(algorithm) = algorithm {
         header.algorithm = match algorithm.as_str() {
             "xchacha20" => EncodingAlgorithm::XChaCha20Poly1305(XChaCha20Poly1305Config {}),
-            "aes256gcm" => EncodingAlgorithm::AES256GCM(AES256GCMConfig { extended_nonce: false }),
-            "aes256gcm-ext" => EncodingAlgorithm::AES256GCM(AES256GCMConfig { extended_nonce: false }),
+            "aes256gcm" => EncodingAlgorithm::AES256GCM(AES256GCMConfig {
+                extended_nonce: false,
+            }),
+            "aes256gcm-ext" => EncodingAlgorithm::AES256GCM(AES256GCMConfig {
+                extended_nonce: false,
+            }),
             other_val => return Err(MyError::UnknownAlgorithm(other_val.to_string()).into()),
         }
         .into();
@@ -33,7 +44,7 @@ pub fn header_from_command_line(algorithm: &Option<String>, chunk_size: &Option<
     Ok(header)
 }
 
-pub fn codec_from_header(file_header: &FileHeader) -> Result<Box<StreamCodec>, Error> {
+pub fn codec_from_header(file_header: &FileHeader) -> Fallible<Box<StreamCodec>> {
     match &file_header.algorithm {
         None => Err(MyError::InvalidHeader("Unfilled algorithm data".into()).into()),
         Some(EncodingAlgorithm::XChaCha20Poly1305(_)) => Ok(Box::new(XChaCha20::new())),
@@ -41,9 +52,13 @@ pub fn codec_from_header(file_header: &FileHeader) -> Result<Box<StreamCodec>, E
     }
 }
 
-pub fn key_derivation_from_header(file_header: &FileHeader) -> Result<Box<KeyDerivationFunction>, Error> {
+pub fn key_derivation_from_header(
+    file_header: &FileHeader,
+) -> Fallible<Box<KeyDerivationFunction>> {
     match &file_header.password_config {
         None => Err(MyError::InvalidHeader("Unfilled key derivation data".into()).into()),
-        Some(PasswordConfig::SCryptSalsa208SHA256(config)) => Ok(Box::new(SCryptSalsa208SHA256::new(config)?)),
+        Some(PasswordConfig::SCryptSalsa208SHA256(config)) => {
+            Ok(Box::new(SCryptSalsa208SHA256::new(config)?))
+        }
     }
 }

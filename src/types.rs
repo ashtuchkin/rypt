@@ -1,5 +1,5 @@
 use crossbeam_channel::{Receiver, Sender};
-use failure::Error;
+use failure::Fallible;
 
 #[derive(Debug)]
 pub struct Chunk {
@@ -17,7 +17,7 @@ pub struct ChunkConfig {
 
 pub trait StreamConverter: Send {
     fn get_chunk_config(&self) -> ChunkConfig;
-    fn convert_blocking(&mut self, input: Receiver<Chunk>, output: Sender<Chunk>) -> Result<(), Error>;
+    fn convert_blocking(&mut self, input: Receiver<Chunk>, output: Sender<Chunk>) -> Fallible<()>;
 }
 
 #[derive(Debug)]
@@ -32,15 +32,15 @@ pub trait StreamCodec {
         &self,
         key: Vec<u8>,
         authenticate_data: Option<Vec<u8>>,
-    ) -> Result<(Vec<u8>, Box<StreamConverter>), Error>;
+    ) -> Fallible<(Vec<u8>, Box<StreamConverter>)>;
     fn start_decoding(
         &self,
         key: Vec<u8>,
         header: Vec<u8>,
         authenticate_data: Option<Vec<u8>>,
-    ) -> Result<Box<StreamConverter>, Error>;
+    ) -> Fallible<Box<StreamConverter>>;
 }
 
 pub trait KeyDerivationFunction {
-    fn derive_key_from_password(&self, password: &str, key_len: usize) -> Result<Vec<u8>, Error>;
+    fn derive_key_from_password(&self, password: &str, key_len: usize) -> Fallible<Vec<u8>>;
 }

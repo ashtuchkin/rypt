@@ -1,3 +1,5 @@
+use failure::{bail, Fallible};
+
 static SCALES: &[u8; 8] = b"KMGTPEZY";
 
 // E.g. 2 B, 3.54 KB
@@ -36,4 +38,50 @@ pub fn to_hex_string(bytes: impl AsRef<[u8]>) -> String {
         .map(|b| format!("{:02X}", b))
         .collect::<Vec<String>>()
         .join("")
+}
+
+#[test]
+fn to_hex_string_test() {
+    assert_eq!(to_hex_string(b"123abcxyz"), "31323361626378797A");
+    assert_eq!(to_hex_string(b""), "");
+}
+
+pub fn try_parse_hex_string(input_string: &str) -> Fallible<Vec<u8>> {
+    let mut acc = 0u8;
+    let mut cnt = 0;
+    let mut res = vec![];
+    for ch in input_string.chars() {
+        if cnt == 0 && ch.is_whitespace() {
+            // allow whitespace between bytes
+            continue;
+        } else if let Some(val) = ch.to_digit(16) {
+            acc = (acc << 4) + val as u8;
+            cnt += 1;
+            if cnt == 2 {
+                res.push(acc);
+                acc = 0u8;
+                cnt = 0;
+            }
+        } else {
+            bail!("Invalid hex character: {}", ch);
+        }
+    }
+
+    if cnt > 0 {
+        bail!("Odd number of hex characters");
+    }
+    Ok(res)
+}
+
+#[test]
+fn parse_hex_test() -> Fallible<()> {
+    assert_eq!(try_parse_hex_string("31323361626378797A")?, b"123abcxyz");
+    assert_eq!(try_parse_hex_string("31 32 33")?, b"123");
+    assert_eq!(try_parse_hex_string("")?, b"");
+    assert_eq!(try_parse_hex_string("   ")?, b"");
+
+    assert!(try_parse_hex_string("a").is_err());
+    assert!(try_parse_hex_string("aq").is_err());
+    assert!(try_parse_hex_string("3 132 33").is_err());
+    Ok(())
 }
