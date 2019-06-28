@@ -1,22 +1,18 @@
-use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use failure::Fallible;
 
 use crate::errors::MyError;
-use crate::runtime_env::RuntimeEnvironment;
 use crate::types::{Chunk, ChunkConfig, StreamConverter};
-use crate::util;
 
 pub fn stream_convert_to_completion(
     mut stream_converter: Box<StreamConverter>,
     input_stream: Box<Read + Send>,
     output_stream: Box<Write + Send>,
     chunk_size: usize,
-    env: &RuntimeEnvironment,
+    mut progress_cb: impl FnMut(usize),
 ) -> Fallible<()> {
     let ChunkConfig {
         input_chunk_offset,
@@ -31,7 +27,6 @@ pub fn stream_convert_to_completion(
     let (write_sender, final_receiver) = crossbeam_channel::unbounded();
 
     // Threads
-    let (progress_sender, progress_thread) = start_progress_thread(env);
     let read_thread = thread::spawn(move || read_stream(input_stream, read_receiver, read_sender));
     let codec_thread =
         thread::spawn(move || stream_converter.convert_blocking(codec_receiver, codec_sender));
@@ -55,15 +50,16 @@ pub fn stream_convert_to_completion(
     }
 
     // Wait while data flows through the pipeline, resupplying used buffers back to the reader.
+    let mut written_bytes = 0usize;
     for mut chunk in final_receiver {
-        progress_sender.send(chunk.buffer.len())?;
+        written_bytes += chunk.buffer.len() - chunk.offset;
+        progress_cb(written_bytes);
         if chunk.buffer.capacity() == buffer_capacity {
             chunk.offset = input_chunk_offset;
             chunk.buffer.resize(input_buffer_size, 0);
             initial_sender.send(chunk).ok(); // Ok to drop vectors when reading has stopped.
         }
     }
-    std::mem::drop(progress_sender);
 
     write_thread
         .join()
@@ -72,9 +68,6 @@ pub fn stream_convert_to_completion(
         .join()
         .map_err(|_| MyError::ThreadJoinError)??;
     read_thread.join().map_err(|_| MyError::ThreadJoinError)??;
-    progress_thread
-        .join()
-        .map_err(|_| MyError::ThreadJoinError)?;
     Ok(())
 }
 
@@ -137,75 +130,4 @@ fn write_stream(
         output.send(chunk)?;
     }
     Ok(())
-}
-
-fn start_progress_thread(_env: &RuntimeEnvironment) -> (Sender<usize>, thread::JoinHandle<()>) {
-    let (sender, receiver) = crossbeam_channel::unbounded();
-    const PRINT_PERIOD: Duration = Duration::from_millis(100);
-    const SPEED_CALC_PERIOD: Duration = Duration::from_secs(10); // Calculate speed over the last 5 seconds
-    const KEEP_STAMPS_COUNT: usize =
-        (SPEED_CALC_PERIOD.as_millis() / PRINT_PERIOD.as_millis()) as usize;
-    let print_ticker = crossbeam_channel::tick(PRINT_PERIOD);
-    let start_time = Instant::now();
-    let mut cur_progress = 0usize;
-    let mut cur_progress_time = Instant::now();
-    let mut stamps = VecDeque::new();
-    stamps.push_back((cur_progress_time, cur_progress));
-    let mut has_ever_printed = false;
-
-    fn human_readable_duration(dur: Duration) -> String {
-        let secs_f64 = dur.as_millis() as f64 / 1000f64;
-        format!("{:.1}s", secs_f64)
-    }
-
-    let mut print_progress = move |stamps: &VecDeque<(Instant, usize)>, final_print: bool| {
-        let (end_period_time, end_period_progress) = *stamps.back().unwrap();
-        let (start_period_time, start_period_progress) = *stamps.front().unwrap();
-        let delta_time = (end_period_time - start_period_time).as_millis() as usize;
-        let delta_progress = end_period_progress - start_period_progress;
-        if delta_time > 0 && delta_progress > 0 {
-            let speed = delta_progress * 1000 / delta_time;
-            let mut stderr = std::io::stderr();
-            write!(
-                stderr,
-                "\r{}Progress: {}, Speed: {}/s, Time: {}",
-                termion::clear::CurrentLine,
-                util::human_file_size(end_period_progress),
-                util::human_file_size(speed),
-                human_readable_duration(Instant::now() - start_time),
-            )
-            .ok();
-            if final_print && has_ever_printed {
-                writeln!(stderr).ok();
-            }
-            has_ever_printed = true;
-        }
-    };
-
-    let join_handle = thread::spawn(move || {
-        loop {
-            crossbeam_channel::select! {
-                recv(receiver) -> res => match res {
-                    Ok(increment_size) => {
-                        cur_progress += increment_size;
-                        cur_progress_time = std::cmp::max(cur_progress_time, Instant::now());
-                    },
-                    Err(_) => {  // Disconnected - finish printing and exit.
-                        print_progress(&stamps, true);
-                        break;
-                    }
-                },
-                recv(print_ticker) -> _ => {
-                    stamps.push_back((cur_progress_time, cur_progress));
-                    if stamps.len() > KEEP_STAMPS_COUNT {
-                        stamps.pop_front();
-                    }
-
-                    print_progress(&stamps, false);
-                },
-            }
-        }
-    });
-
-    (sender, join_handle)
 }

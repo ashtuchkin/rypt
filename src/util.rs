@@ -1,4 +1,5 @@
 use failure::{bail, Fallible};
+use std::time::Duration;
 
 static SCALES: &[u8; 8] = b"KMGTPEZY";
 
@@ -28,6 +29,11 @@ fn human_file_size_test() {
     assert_eq!(human_file_size(10240), "10.00 KB");
     assert_eq!(human_file_size(1024 * 1024), "1.00 MB");
     assert_eq!(human_file_size(std::usize::MAX), "16.00 EB");
+}
+
+pub fn human_duration(dur: Duration) -> String {
+    let secs_f64 = dur.as_millis() as f64 / 1000f64;
+    format!("{:.1}s", secs_f64)
 }
 
 #[allow(dead_code)]
