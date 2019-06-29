@@ -1,7 +1,7 @@
 use failure::{bail, Fallible};
 use std::time::Duration;
 
-static SCALES: &[u8; 8] = b"KMGTPEZY";
+static SCALES: &[&str; 7] = &["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
 
 // E.g. 2 B, 3.54 KB
 pub fn human_file_size(val: usize) -> String {
@@ -9,12 +9,9 @@ pub fn human_file_size(val: usize) -> String {
     let scale_idx = std::cmp::max(filled_bits - 1, 0) / 10; // each scale is 10 bits.
     let divider = 2.0f64.powi(scale_idx * 10);
 
-    let (scale, places) = if scale_idx == 0 {
-        (String::new(), 0)
-    } else {
-        (char::from(SCALES[(scale_idx as usize) - 1]).to_string(), 2)
-    };
-    format!("{:.*} {}B", places, (val as f64 / divider), scale)
+    let places = if scale_idx == 0 { 0 } else { 2 };
+    let scale = SCALES[(scale_idx as usize)];
+    format!("{:.*} {}", places, (val as f64 / divider), scale)
 }
 
 #[test]
@@ -24,16 +21,25 @@ fn human_file_size_test() {
     assert_eq!(human_file_size(512), "512 B");
     assert_eq!(human_file_size(1000), "1000 B");
     assert_eq!(human_file_size(1023), "1023 B");
-    assert_eq!(human_file_size(1024), "1.00 KB");
-    assert_eq!(human_file_size(1100), "1.07 KB");
-    assert_eq!(human_file_size(10240), "10.00 KB");
-    assert_eq!(human_file_size(1024 * 1024), "1.00 MB");
-    assert_eq!(human_file_size(std::usize::MAX), "16.00 EB");
+    assert_eq!(human_file_size(1024), "1.00 KiB");
+    assert_eq!(human_file_size(1100), "1.07 KiB");
+    assert_eq!(human_file_size(10240), "10.00 KiB");
+    assert_eq!(human_file_size(1024 * 1024), "1.00 MiB");
+    assert_eq!(human_file_size(std::usize::MAX), "16.00 EiB");
 }
 
 pub fn human_duration(dur: Duration) -> String {
-    let secs_f64 = dur.as_millis() as f64 / 1000f64;
-    format!("{:.1}s", secs_f64)
+    let mut time = dur.as_secs();
+    let secs = time % 60;
+    time /= 60;
+    let mins = time % 60;
+    time /= 60;
+    let hrs = time;
+    if hrs > 0 {
+        format!("{}:{:02}:{:02}", hrs, mins, secs)
+    } else {
+        format!("{}:{:02}", mins, secs)
+    }
 }
 
 #[allow(dead_code)]

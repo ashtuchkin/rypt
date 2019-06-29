@@ -1,6 +1,11 @@
 
 https://crypto.stackexchange.com/questions/53104/is-it-safe-to-store-both-the-aes-related-data-and-the-pbkdf2-related-data-excep?rq=1
 
+
+ * delete the output file if interrupted
+
+
+
 Questions:
  * How to add finalization to AES256-GCM?
  * Decide whether we should write authentication tags separately in the beginning.
