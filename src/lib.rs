@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 
 use crate::errors::MyError;
 use crate::header::FileHeader;
-use crate::progress::{print_file_progress_header, ProgressPrinter};
+use crate::progress::ProgressPrinter;
 pub use crate::runtime_env::{Reader, RuntimeEnvironment, Writer};
 use crate::streaming_core::stream_convert_to_completion;
-use failure::{bail, Error, Fallible, ResultExt};
+use failure::{bail, Fallible, ResultExt};
 
 mod encoding;
 mod errors;
@@ -64,7 +64,7 @@ fn open_streams(
             let file = OpenOptions::new()
                 .read(true)
                 .open(input_path)
-                .with_context(|e| format!("Input {}: {}", input_path.to_string_lossy(), e))?;
+                .with_context(|e| format!("{}: {}", input_path.to_string_lossy(), e))?;
             let filesize = file.metadata()?.len() as usize;
             (Box::new(file), Some(filesize))
         }
@@ -77,7 +77,7 @@ fn open_streams(
                 .write(true)
                 .create_new(true)  // Make sure we don't overwrite existing files
                 .open(output_path)
-                .with_context(|e| format!("Output {}: {}", output_path.to_string_lossy(), e))?;
+                .with_context(|e| format!("{}: {}", output_path.to_string_lossy(), e))?;
             Box::new(file)
         }
     };
@@ -216,7 +216,12 @@ Home page and documentation: <https://github.com/ashtuchkin/rypt>",
     })
 }
 
-fn encrypt_file(input_path: &Path, opts: &Options, env: &RuntimeEnvironment) -> Fallible<()> {
+fn encrypt_file(
+    input_path: &Path,
+    opts: &Options,
+    env: &RuntimeEnvironment,
+    progress_printer: &mut ProgressPrinter,
+) -> Fallible<()> {
     let (output_path, remove_input) = if input_path.to_str() == Some("-") {
         if env.stdout_is_tty {
             bail!("Encrypted data cannot be written to a terminal");
@@ -236,8 +241,8 @@ fn encrypt_file(input_path: &Path, opts: &Options, env: &RuntimeEnvironment) -> 
         new_ext.push(&opts.suffix);
         (input_path.with_extension(new_ext), true)
     };
-    let (input_stream, mut output_stream, _filesize) =
-        open_streams(input_path, &output_path, &env)?;
+    let (input_stream, mut output_stream, filesize) = open_streams(input_path, &output_path, &env)?;
+    progress_printer.set_filesize(filesize);
 
     let file_header = registry::header_from_command_line(&opts.algorithm, &None)?;
 
@@ -250,15 +255,12 @@ fn encrypt_file(input_path: &Path, opts: &Options, env: &RuntimeEnvironment) -> 
     let (codec_header, stream_converter) = codec.start_encoding(key, Some(header_buf))?;
     output_stream.write_all(&codec_header)?;
 
-    let mut stderr = env.stderr.borrow_mut();
-    let mut progress_printer = ProgressPrinter::new(stderr.as_mut(), opts.verbose > 0);
-
     stream_convert_to_completion(
         stream_converter,
         input_stream,
         output_stream,
         file_header.chunk_size as usize,
-        |written_bytes| progress_printer.print_progress(written_bytes),
+        &mut |bytes| progress_printer.print_progress(bytes),
     )?;
 
     if remove_input {
@@ -267,7 +269,12 @@ fn encrypt_file(input_path: &Path, opts: &Options, env: &RuntimeEnvironment) -> 
     Ok(())
 }
 
-fn decrypt_file(input_path: &Path, opts: &Options, env: &RuntimeEnvironment) -> Fallible<()> {
+fn decrypt_file(
+    input_path: &Path,
+    opts: &Options,
+    env: &RuntimeEnvironment,
+    progress_printer: &mut ProgressPrinter,
+) -> Fallible<()> {
     let (output_path, remove_input) = if input_path.to_str() == Some("-") {
         if env.stdin_is_tty {
             bail!("Encrypted data cannot be read from a terminal.");
@@ -283,8 +290,8 @@ fn decrypt_file(input_path: &Path, opts: &Options, env: &RuntimeEnvironment) -> 
         (input_path.with_extension(""), true)
     };
 
-    let (mut input_stream, output_stream, _filesize) =
-        open_streams(input_path, &output_path, &env)?;
+    let (mut input_stream, output_stream, filesize) = open_streams(input_path, &output_path, &env)?;
+    progress_printer.set_filesize(filesize);
 
     let (file_header, header_buf) = FileHeader::read(&mut input_stream)?;
 
@@ -296,15 +303,12 @@ fn decrypt_file(input_path: &Path, opts: &Options, env: &RuntimeEnvironment) -> 
     input_stream.read_exact(&mut codec_header)?;
     let stream_converter = codec.start_decoding(key, codec_header, Some(header_buf))?;
 
-    let mut stderr = env.stderr.borrow_mut();
-    let mut progress_printer = ProgressPrinter::new(stderr.as_mut(), opts.verbose > 0);
-
     stream_convert_to_completion(
         stream_converter,
         input_stream,
         output_stream,
         file_header.chunk_size as usize,
-        |written_bytes| progress_printer.print_progress(written_bytes),
+        &mut |bytes| progress_printer.print_progress(bytes),
     )?;
     if remove_input {
         fs::remove_file(input_path)?;
@@ -312,35 +316,36 @@ fn decrypt_file(input_path: &Path, opts: &Options, env: &RuntimeEnvironment) -> 
     Ok(())
 }
 
-fn print_err(env: &RuntimeEnvironment, e: Error) {
-    let program = env.program_name.to_string_lossy();
-    let mut stderr = env.stderr.borrow_mut();
-    writeln!(stderr, "{}: {}", program, e).ok();
-}
-
 pub fn run(env: &RuntimeEnvironment) -> i32 {
+    let mut stderr = env.stderr.borrow_mut();
     if unsafe { libsodium_sys::sodium_init() } == -1 {
-        print_err(env, MyError::InitError.into());
+        writeln!(stderr, "{}: {}", PKG_NAME, MyError::InitError).ok();
         return 1;
     }
 
     match parse_command_line(env) {
-        Err(e) => {
-            print_err(env, e);
+        Err(err) => {
+            writeln!(stderr, "{}: {}", PKG_NAME, err).ok();
             return 1;
         }
         Ok(opts) => {
             let total_files = opts.input_paths.len();
             for (file_idx, input_path) in opts.input_paths.iter().enumerate() {
-                print_file_progress_header(input_path, &opts, &env, file_idx, total_files);
+                let mut progress_printer = ProgressPrinter::new(&mut stderr, opts.verbose);
+                progress_printer.print_file_header(input_path, file_idx, total_files);
 
                 let res = match opts.mode {
                     OperationMode::Auxiliary => Ok(()),
-                    OperationMode::Encrypt => encrypt_file(input_path, &opts, &env),
-                    OperationMode::Decrypt => decrypt_file(input_path, &opts, &env),
+                    OperationMode::Encrypt => {
+                        encrypt_file(input_path, &opts, &env, &mut progress_printer)
+                    }
+                    OperationMode::Decrypt => {
+                        decrypt_file(input_path, &opts, &env, &mut progress_printer)
+                    }
                 };
+                std::mem::drop(progress_printer);
                 if let Err(err) = res {
-                    print_err(env, err);
+                    writeln!(stderr, "{}: {}", PKG_NAME, err).ok();
                 }
             }
         }

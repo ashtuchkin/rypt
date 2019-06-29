@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
@@ -11,9 +11,9 @@ pub struct RuntimeEnvironment {
     pub program_name: OsString,
     pub cmdline_args: Vec<OsString>,
     pub env_vars: HashMap<OsString, OsString>,
-    pub stdin: Cell<Box<io::Read + Send>>,
-    pub stdout: Cell<Box<io::Write + Send>>,
-    pub stderr: RefCell<Box<io::Write + Send>>,
+    pub stdin: RefCell<Reader>,
+    pub stdout: RefCell<Writer>,
+    pub stderr: RefCell<Writer>,
     pub stdin_is_tty: bool,
     pub stdout_is_tty: bool,
 }
@@ -35,8 +35,8 @@ impl RuntimeEnvironment {
             program_name,
             cmdline_args,
             env_vars: env::vars_os().collect(),
-            stdin: Cell::new(Box::new(stdin)),
-            stdout: Cell::new(Box::new(stdout)),
+            stdin: RefCell::new(Box::new(stdin)),
+            stdout: RefCell::new(Box::new(stdout)),
             stderr: RefCell::new(Box::new(io::stderr())),
             stdin_is_tty,
             stdout_is_tty,
@@ -50,8 +50,8 @@ impl Default for RuntimeEnvironment {
             program_name: "rypt".into(),
             cmdline_args: vec![],
             env_vars: HashMap::new(),
-            stdin: Cell::new(Box::new(io::empty())),
-            stdout: Cell::new(Box::new(io::sink())),
+            stdin: RefCell::new(Box::new(io::empty())),
+            stdout: RefCell::new(Box::new(io::sink())),
             stderr: RefCell::new(Box::new(io::sink())),
             stdin_is_tty: true,
             stdout_is_tty: true,

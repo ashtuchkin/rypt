@@ -1,26 +1,9 @@
-use crate::{util, Options, RuntimeEnvironment};
+use crate::{util, Writer};
 use std::collections::VecDeque;
 use std::io::Write;
 use std::iter::FromIterator;
 use std::path::Path;
 use std::time::{Duration, Instant};
-
-pub fn print_file_progress_header(
-    input_path: &Path,
-    opts: &Options,
-    env: &RuntimeEnvironment,
-    file_idx: usize,
-    total_files: usize,
-) {
-    if opts.verbose > 0 {
-        let mut path = input_path.to_string_lossy();
-        if path == "-" {
-            path = "(stdin)".into();
-        }
-        let mut stderr = env.stderr.borrow_mut();
-        writeln!(stderr, "{} ({}/{})", path, file_idx + 1, total_files).ok();
-    }
-}
 
 const PRINT_PERIOD: Duration = Duration::from_millis(100);
 const SPEED_CALC_PERIOD: Duration = Duration::from_secs(10); // Calculate speed over the last 10 seconds
@@ -28,27 +11,44 @@ const KEEP_STAMPS_COUNT: usize =
     (SPEED_CALC_PERIOD.as_millis() / PRINT_PERIOD.as_millis()) as usize;
 
 pub struct ProgressPrinter<'a> {
+    output: &'a mut Writer,
     start_time: Instant,
     stamps: VecDeque<(Instant, usize)>,
     last_printed_period: u64,
-    output: &'a mut Write,
-    do_print: bool, // TODO: Avoid creation of the progress printer if we're not printing.
+    filesize: Option<usize>,
+    verbose: i32,
 }
 
 impl<'a> ProgressPrinter<'a> {
-    pub fn new(output: &mut Write, do_print: bool) -> ProgressPrinter {
+    pub fn new(output: &'a mut Writer, verbose: i32) -> ProgressPrinter<'a> {
         let now = Instant::now();
         ProgressPrinter {
+            output,
             start_time: now,
             stamps: VecDeque::from_iter(vec![(now, 0usize)].into_iter()),
             last_printed_period: 0,
-            output,
-            do_print,
+            filesize: None,
+            verbose,
         }
     }
 
+    pub fn set_filesize(&mut self, filesize: Option<usize>) {
+        self.filesize = filesize;
+    }
+
+    pub fn print_file_header(&mut self, input_path: &Path, file_idx: usize, total_files: usize) {
+        if self.verbose <= 0 {
+            return;
+        }
+        let mut path = input_path.to_string_lossy();
+        if path == "-" {
+            path = "(stdin)".into();
+        }
+        writeln!(self.output, "{} ({}/{})", path, file_idx + 1, total_files).ok();
+    }
+
     pub fn print_progress(&mut self, written_bytes: usize) {
-        if !self.do_print {
+        if self.verbose <= 0 {
             return;
         }
         let now = Instant::now();

@@ -12,7 +12,7 @@ pub fn stream_convert_to_completion(
     input_stream: Box<Read + Send>,
     output_stream: Box<Write + Send>,
     chunk_size: usize,
-    mut progress_cb: impl FnMut(usize),
+    progress_cb: &mut FnMut(usize),
 ) -> Fallible<()> {
     let ChunkConfig {
         input_chunk_offset,

@@ -3,7 +3,7 @@ use failure::Fallible;
 use rand::prelude::*;
 use rypt::util::to_hex_string;
 use rypt::{RuntimeEnvironment, DEFAULT_FILE_SUFFIX};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::{env, fs};
@@ -17,7 +17,7 @@ fn help_message() -> Fallible<()> {
     let exit_code = rypt::run(&RuntimeEnvironment {
         program_name: "example-nontrivial-rypt-name".into(),
         cmdline_args: to_os_strs(&["-h"]),
-        stdout: Cell::new(Box::new(stdout_writer)),
+        stdout: RefCell::new(Box::new(stdout_writer)),
         ..Default::default()
     });
     assert_eq!(exit_code, 0);
