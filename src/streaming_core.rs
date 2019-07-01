@@ -38,8 +38,8 @@ pub fn stream_convert_to_completion(
     let buffer_capacity =
         input_chunk_offset + chunk_size + std::cmp::max(input_chunk_asize, output_chunk_asize) + 1; // +1 byte to allow reader to check Eof
     for _ in 0..5 {
-        let mut buffer = Vec::with_capacity(buffer_capacity);
-        buffer.resize(input_buffer_size, 0);
+        let mut buffer = vec![0u8; buffer_capacity];
+        buffer.truncate(input_buffer_size);
         initial_sender
             .send(Chunk {
                 buffer,

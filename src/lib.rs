@@ -248,6 +248,8 @@ fn encrypt_file(
 
     let codec = registry::codec_from_header(&file_header)?;
     let codec_config = codec.get_config();
+
+    // NOTE: This takes some non-trivial time, depending on the derivation function (> 40 ms).
     let key = derive_key(&file_header, codec_config.key_size, &opts)?;
 
     let header_buf = file_header.write(&mut output_stream)?;
