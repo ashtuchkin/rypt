@@ -23,18 +23,16 @@ Command line ergonomics:
 
 
 File structure:
-!! All fields except the first two are padded to 8 bytes, including data chunks.
 
 | Item                                             | Size         |
 |--------------------------------------------------|--------------| 
-| File signature and version: ASCII 'enc1'         | 4 bytes      |
+| File signature: ASCII 'rypt'                     | 4 bytes      |
 | Header length, little-endian uint32              | 4 bytes      |
-| Header protobuf                                  | header len   |
-| Encryption header                                | (algorithm dependent) |
 | User authenticated data len, little-endian uint64, 0 if not provided, maxint64 if detached  | 8 bytes      |
-| User authenticated data                          | auth data len|
 | Ciphertext chunk size, little-endian uint64      | 8 bytes      |
-| Ciphertext chunk x N                             | min(chunk_len, remaining size) |
+| Header protobuf                                  | header len (aligned to 8 bytes) |
+| User authenticated data                          | auth data len (aligned to 8 bytes) |
+| N x Ciphertext chunk                             | min(chunk_size, remaining size) |
 
 Chunks are provided as-is to the encoding/decoding algorithms.
 Authentication:
@@ -56,3 +54,4 @@ Algorithm-specific changes:
       This extension can be disabled in header protobuf for compatibility.
     * As the algorithm does not provided built-in tagging for final chunk, use the algorithm described above. 
 
+https://crypto.stackexchange.com/questions/53104/is-it-safe-to-store-both-the-aes-related-data-and-the-pbkdf2-related-data-excep?rq=1

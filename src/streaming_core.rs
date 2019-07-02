@@ -8,10 +8,11 @@ use crate::errors::MyError;
 use crate::types::{Chunk, ChunkConfig, StreamConverter};
 
 pub fn stream_convert_to_completion(
-    mut stream_converter: Box<StreamConverter>,
+    stream_converter: Box<StreamConverter>,
     input_stream: Box<Read + Send>,
     output_stream: Box<Write + Send>,
     chunk_size: usize,
+    mut authentication_data: Option<Vec<u8>>,
     progress_cb: &mut FnMut(usize),
 ) -> Fallible<()> {
     let ChunkConfig {
@@ -29,7 +30,7 @@ pub fn stream_convert_to_completion(
     // Threads
     let read_thread = thread::spawn(move || read_stream(input_stream, read_receiver, read_sender));
     let codec_thread =
-        thread::spawn(move || stream_converter.convert_blocking(codec_receiver, codec_sender));
+        thread::spawn(move || convert_stream(stream_converter, codec_receiver, codec_sender));
     let write_thread =
         thread::spawn(move || write_stream(output_stream, write_receiver, write_sender));
 
@@ -45,6 +46,7 @@ pub fn stream_convert_to_completion(
                 buffer,
                 offset: input_chunk_offset,
                 is_last_chunk: false,
+                authentication_data: authentication_data.take(), // Only provide auth data to the first chunk
             })
             .ok();
     }
@@ -115,6 +117,17 @@ fn read_stream(
         output.send(chunk)?;
     }
     Err(std::io::Error::from(ErrorKind::NotConnected).into())
+}
+
+fn convert_stream(
+    mut stream_converter: Box<StreamConverter>,
+    input: Receiver<Chunk>,
+    output: Sender<Chunk>,
+) -> Fallible<()> {
+    for chunk in input {
+        output.send(stream_converter.convert_chunk(chunk)?)?;
+    }
+    Ok(())
 }
 
 fn write_stream(

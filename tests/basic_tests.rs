@@ -97,6 +97,7 @@ fn encrypt_decrypt_stdio() -> Fallible<()> {
     let output = util::main_cmd(&["--password-unsafe", password])?
         .stdin_buf(plaintext)?
         .output()?;
+    assert_eq!(std::str::from_utf8(&output.stderr)?, "");
     assert!(output.status.success());
     let ciphertext = output.stdout;
 
@@ -104,6 +105,7 @@ fn encrypt_decrypt_stdio() -> Fallible<()> {
         .stdin_buf(ciphertext)?
         .output()?;
 
+    assert_eq!(std::str::from_utf8(&output.stderr)?, "");
     assert!(output.status.success());
     assert_eq!(output.stdout, plaintext);
 

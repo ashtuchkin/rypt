@@ -9,7 +9,7 @@ use libsodium_sys::{
 };
 
 use crate::errors::MyError;
-use crate::header::SCryptSalsa208SHA256Config;
+use crate::header::SCryptSalsa208Sha256Config;
 use crate::types::KeyDerivationFunction;
 
 const SCRYPTSALSA208SHA256_SALTBYTES: usize =
@@ -22,7 +22,7 @@ pub struct SCryptSalsa208SHA256 {
 }
 
 impl SCryptSalsa208SHA256 {
-    pub fn new(config: &SCryptSalsa208SHA256Config) -> Fallible<Self> {
+    pub fn new(config: &SCryptSalsa208Sha256Config) -> Fallible<Self> {
         let salt = config.salt.as_slice()
             .try_into() // Check the length is SCRYPTSALSA208SHA256_SALTBYTES
             .map_err(|_| {
@@ -36,11 +36,11 @@ impl SCryptSalsa208SHA256 {
         })
     }
 
-    pub fn default_config_random_seed() -> SCryptSalsa208SHA256Config {
+    pub fn default_config_random_seed() -> SCryptSalsa208Sha256Config {
         let mut salt = vec![0u8; SCRYPTSALSA208SHA256_SALTBYTES];
         unsafe { randombytes_buf(salt.as_mut_ptr() as *mut c_void, salt.len()) };
 
-        SCryptSalsa208SHA256Config {
+        SCryptSalsa208Sha256Config {
             salt,
             opslimit: u64::from(crypto_pwhash_scryptsalsa208sha256_OPSLIMIT_INTERACTIVE),
             memlimit: u64::from(crypto_pwhash_scryptsalsa208sha256_MEMLIMIT_INTERACTIVE),

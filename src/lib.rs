@@ -2,11 +2,11 @@
 
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::errors::MyError;
-use crate::header::FileHeader;
+use crate::header::{read_header, write_header, FileHeader, UserdataState};
 use crate::progress::ProgressPrinter;
 pub use crate::runtime_env::{Reader, RuntimeEnvironment, Writer};
 use crate::streaming_core::stream_convert_to_completion;
@@ -244,7 +244,8 @@ fn encrypt_file(
     let (input_stream, mut output_stream, filesize) = open_streams(input_path, &output_path, &env)?;
     progress_printer.set_filesize(filesize);
 
-    let file_header = registry::header_from_command_line(&opts.algorithm, &None)?;
+    let mut file_header = registry::header_from_command_line(&opts.algorithm)?;
+    let chunk_size = 1024 * 1024; // TODO: get from command line
 
     let codec = registry::codec_from_header(&file_header)?;
     let codec_config = codec.get_config();
@@ -252,16 +253,23 @@ fn encrypt_file(
     // NOTE: This takes some non-trivial time, depending on the derivation function (> 40 ms).
     let key = derive_key(&file_header, codec_config.key_size, &opts)?;
 
-    let header_buf = file_header.write(&mut output_stream)?;
+    let (encryption_header, stream_converter) = codec.start_encoding(&key)?;
+    file_header.encryption_header = encryption_header;
 
-    let (codec_header, stream_converter) = codec.start_encoding(key, Some(header_buf))?;
-    output_stream.write_all(&codec_header)?;
+    let header_buf = write_header(
+        &mut output_stream,
+        &file_header,
+        UserdataState::None,
+        None,
+        chunk_size,
+    )?;
 
     stream_convert_to_completion(
         stream_converter,
         input_stream,
         output_stream,
-        file_header.chunk_size as usize,
+        chunk_size,
+        Some(header_buf),
         &mut |bytes| progress_printer.print_progress(bytes),
     )?;
 
@@ -295,21 +303,20 @@ fn decrypt_file(
     let (mut input_stream, output_stream, filesize) = open_streams(input_path, &output_path, &env)?;
     progress_printer.set_filesize(filesize);
 
-    let (file_header, header_buf) = FileHeader::read(&mut input_stream)?;
+    let (file_header, header_buf, _userdata_state, chunk_size) = read_header(&mut input_stream)?;
 
     let codec = registry::codec_from_header(&file_header)?;
     let codec_config = codec.get_config();
     let key = derive_key(&file_header, codec_config.key_size, &opts)?;
 
-    let mut codec_header = vec![0u8; codec_config.header_size];
-    input_stream.read_exact(&mut codec_header)?;
-    let stream_converter = codec.start_decoding(key, codec_header, Some(header_buf))?;
+    let stream_converter = codec.start_decoding(&key, &file_header.encryption_header)?;
 
     stream_convert_to_completion(
         stream_converter,
         input_stream,
         output_stream,
-        file_header.chunk_size as usize,
+        chunk_size,
+        Some(header_buf),
         &mut |bytes| progress_printer.print_progress(bytes),
     )?;
     if remove_input {

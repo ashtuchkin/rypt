@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package rypt;
+
+// Main protobuf, representing file header.
+message FileHeader {
+    oneof encryption_algorithm {
+        XChaCha20Poly1305Config xchacha20_poly1305 = 1;
+        AES256GCMConfig aes256_gcm = 2;
+    }
+    bytes encryption_header = 7;  // Per-file randomness data, similar to the password derivation salt.
+
+    oneof password_derivation {
+        SCryptSalsa208SHA256Config scrypt_salsa208_sha256 = 8;
+    }
+    //bytes password_derivation_salt = 15;
+}
+
+
+message SCryptSalsa208SHA256Config {
+    bytes salt = 1;
+    uint64 opslimit = 2;
+    uint64 memlimit = 3;
+}
+
+message XChaCha20Poly1305Config {
+}
+
+message AES256GCMConfig {
+    bool extended_nonce = 2;
+}

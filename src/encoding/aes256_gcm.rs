@@ -1,6 +1,5 @@
 use std::os::raw::{c_ulonglong, c_void};
 
-use crossbeam_channel::{Receiver, Sender};
 use failure::Fallible;
 use libsodium_sys::{
     crypto_aead_aes256gcm_decrypt as aes256gcm_decrypt,
@@ -11,7 +10,7 @@ use libsodium_sys::{
 };
 
 use crate::errors::MyError;
-use crate::header::AES256GCMConfig;
+use crate::header::Aes256gcmConfig;
 use crate::types::{Chunk, ChunkConfig, StreamCodec, StreamCodecConfig, StreamConverter};
 
 const ABYTES: usize = libsodium_sys::crypto_aead_aes256gcm_ABYTES as usize; // 16
@@ -73,7 +72,7 @@ pub struct Aes256Gcm {
 }
 
 impl Aes256Gcm {
-    pub fn new(config: &AES256GCMConfig) -> Aes256Gcm {
+    pub fn new(config: &Aes256gcmConfig) -> Aes256Gcm {
         Aes256Gcm {
             extended_nonce: config.extended_nonce,
         }
@@ -82,32 +81,18 @@ impl Aes256Gcm {
 
 impl StreamCodec for Aes256Gcm {
     fn get_config(&self) -> StreamCodecConfig {
-        StreamCodecConfig {
-            header_size: header_size(self.extended_nonce),
-            key_size: KEYBYTES,
-        }
+        StreamCodecConfig { key_size: KEYBYTES }
     }
 
-    fn start_encoding(
-        &self,
-        key: Vec<u8>,
-        authenticate_data: Option<Vec<u8>>,
-    ) -> Fallible<(Vec<u8>, Box<StreamConverter>)> {
-        let (converter, header) =
-            Aes256GcmEncoder::new(key, authenticate_data, self.extended_nonce)?;
+    fn start_encoding(&self, key: &[u8]) -> Fallible<(Vec<u8>, Box<StreamConverter>)> {
+        let (converter, header) = Aes256GcmEncoder::new(key, self.extended_nonce)?;
         Ok((header, Box::new(converter)))
     }
 
-    fn start_decoding(
-        &self,
-        key: Vec<u8>,
-        header: Vec<u8>,
-        authenticate_data: Option<Vec<u8>>,
-    ) -> Fallible<Box<StreamConverter>> {
+    fn start_decoding(&self, key: &[u8], header: &[u8]) -> Fallible<Box<StreamConverter>> {
         Ok(Box::new(Aes256GcmDecoder::new(
             key,
             header,
-            authenticate_data,
             self.extended_nonce,
         )?))
     }
@@ -115,16 +100,11 @@ impl StreamCodec for Aes256Gcm {
 
 struct Aes256GcmEncoder {
     state: [u8; STATE_BYTES], // 32 byte key, 24 byte long nonce, 8 byte counter.
-    authenticate_data: Option<Vec<u8>>,
     extended_nonce: bool,
 }
 
 impl Aes256GcmEncoder {
-    fn new(
-        key: Vec<u8>,
-        authenticate_data: Option<Vec<u8>>,
-        extended_nonce: bool,
-    ) -> Fallible<(Aes256GcmEncoder, Vec<u8>)> {
+    fn new(key: &[u8], extended_nonce: bool) -> Fallible<(Aes256GcmEncoder, Vec<u8>)> {
         assert_eq!(key.len(), KEYBYTES);
         if unsafe { aes256gcm_is_available() } == 0 {
             return Err(MyError::HardwareUnsupported.into());
@@ -137,7 +117,7 @@ impl Aes256GcmEncoder {
 
         // Create algorithm state from long nonce and key. message counter starts with 0.
         let mut state = [0u8; STATE_BYTES];
-        state[..KEYBYTES].copy_from_slice(&key);
+        state[..KEYBYTES].copy_from_slice(key);
         state[KEYBYTES..KEYBYTES + nonce_len].copy_from_slice(&nonce);
 
         // Header is just the nonce
@@ -145,7 +125,6 @@ impl Aes256GcmEncoder {
         let encoder = Aes256GcmEncoder {
             state,
             extended_nonce,
-            authenticate_data,
         };
         Ok((encoder, header))
     }
@@ -160,77 +139,65 @@ impl StreamConverter for Aes256GcmEncoder {
         }
     }
 
-    #[allow(clippy::assertions_on_constants)]
-    fn convert_blocking(&mut self, input: Receiver<Chunk>, output: Sender<Chunk>) -> Fallible<()> {
-        assert!(SHA512_BYTES > KEYBYTES + NONCE_BYTES);
-        let mut hash_buf = [0u8; SHA512_BYTES];
+    fn convert_chunk(&mut self, mut chunk: Chunk) -> Fallible<Chunk> {
+        let plaintext_len = chunk.buffer.len();
+        assert!(plaintext_len < unsafe { messagebytes_max() });
 
-        for mut chunk in input {
-            let plaintext_len = chunk.buffer.len();
-            assert!(plaintext_len < unsafe { messagebytes_max() });
+        chunk.buffer.resize(plaintext_len + ABYTES, 0);
 
-            chunk.buffer.resize(plaintext_len + ABYTES, 0);
+        let adata = chunk.authentication_data.take().unwrap_or_default();
 
-            let adata = self.authenticate_data.take().unwrap_or_default();
-
-            let key_and_nonce = if self.extended_nonce {
-                unsafe {
-                    // Increment counter in the state.
-                    sodium_increment(
-                        self.state.as_mut_ptr().add(KEYBYTES + LONG_NONCE_BYTES),
-                        MESSAGE_COUNTER_BYTES,
-                    );
-
-                    // Hash state to get the key and nonce for this chunk.
-                    hash_sha512(
-                        hash_buf.as_mut_ptr(),
-                        self.state.as_ptr(),
-                        self.state.len() as c_ulonglong,
-                    );
-                }
-                hash_buf
-            } else {
-                // Regular nonce: increment it.
-                unsafe {
-                    sodium_increment(self.state.as_mut_ptr().add(KEYBYTES), NONCE_BYTES);
-                }
-                self.state
-            };
-
+        let mut extended_hash_buf = [0u8; SHA512_BYTES];
+        let key_and_nonce = if self.extended_nonce {
             unsafe {
-                // Use the key and nonce for this chunk. NOTE: Encryption happens in-place.
-                aes256gcm_encrypt(
-                    chunk.buffer.as_mut_ptr(),
-                    std::ptr::null_mut(),
-                    chunk.buffer.as_ptr(),
-                    plaintext_len as c_ulonglong,
-                    adata.as_ptr(),
-                    adata.len() as c_ulonglong,
-                    std::ptr::null(),
-                    key_and_nonce.as_ptr().add(KEYBYTES),
-                    key_and_nonce.as_ptr(),
+                // Increment counter in the state.
+                sodium_increment(
+                    self.state.as_mut_ptr().add(KEYBYTES + LONG_NONCE_BYTES),
+                    MESSAGE_COUNTER_BYTES,
+                );
+
+                // Hash state to get the key and nonce for this chunk.
+                hash_sha512(
+                    extended_hash_buf.as_mut_ptr(),
+                    self.state.as_ptr(),
+                    self.state.len() as c_ulonglong,
                 );
             }
+            extended_hash_buf
+        } else {
+            // Regular nonce: increment it.
+            unsafe {
+                sodium_increment(self.state.as_mut_ptr().add(KEYBYTES), NONCE_BYTES);
+            }
+            self.state
+        };
 
-            output.send(chunk)?;
+        unsafe {
+            // Use the key and nonce for this chunk. NOTE: Encryption happens in-place.
+            aes256gcm_encrypt(
+                chunk.buffer.as_mut_ptr(),
+                std::ptr::null_mut(),
+                chunk.buffer.as_ptr(),
+                plaintext_len as c_ulonglong,
+                adata.as_ptr(),
+                adata.len() as c_ulonglong,
+                std::ptr::null(),
+                key_and_nonce.as_ptr().add(KEYBYTES),
+                key_and_nonce.as_ptr(),
+            );
         }
-        Ok(())
+
+        Ok(chunk)
     }
 }
 
 struct Aes256GcmDecoder {
     state: [u8; STATE_BYTES], // 8 byte counter, then 24 byte long nonce, then 32 byte key.
-    authenticate_data: Option<Vec<u8>>,
     extended_nonce: bool,
 }
 
 impl Aes256GcmDecoder {
-    fn new(
-        key: Vec<u8>,
-        header: Vec<u8>,
-        authenticate_data: Option<Vec<u8>>,
-        extended_nonce: bool,
-    ) -> Fallible<Aes256GcmDecoder> {
+    fn new(key: &[u8], header: &[u8], extended_nonce: bool) -> Fallible<Aes256GcmDecoder> {
         let nonce_len = header_size(extended_nonce);
         let nonce = header;
         assert_eq!(key.len(), KEYBYTES);
@@ -243,12 +210,11 @@ impl Aes256GcmDecoder {
 
         // Create algorithm state from long nonce in header and the key. message counter starts with 0.
         let mut state = [0u8; STATE_BYTES];
-        state[..KEYBYTES].copy_from_slice(&key);
-        state[KEYBYTES..KEYBYTES + nonce_len].copy_from_slice(&nonce);
+        state[..KEYBYTES].copy_from_slice(key);
+        state[KEYBYTES..KEYBYTES + nonce_len].copy_from_slice(nonce);
 
         Ok(Aes256GcmDecoder {
             state,
-            authenticate_data,
             extended_nonce,
         })
     }
@@ -263,60 +229,57 @@ impl StreamConverter for Aes256GcmDecoder {
         }
     }
 
-    fn convert_blocking(&mut self, input: Receiver<Chunk>, output: Sender<Chunk>) -> Fallible<()> {
-        let mut hash_buf = [0u8; SHA512_BYTES];
-        for mut chunk in input {
-            let ciphertext_len = chunk.buffer.len();
-            assert!(ciphertext_len >= ABYTES);
-            assert!(ciphertext_len < ABYTES + unsafe { messagebytes_max() });
+    fn convert_chunk(&mut self, mut chunk: Chunk) -> Fallible<Chunk> {
+        let ciphertext_len = chunk.buffer.len();
+        assert!(ciphertext_len >= ABYTES);
+        assert!(ciphertext_len < ABYTES + unsafe { messagebytes_max() });
 
-            let adata = self.authenticate_data.take().unwrap_or_default();
+        let adata = chunk.authentication_data.take().unwrap_or_default();
 
-            let key_and_nonce = if self.extended_nonce {
-                unsafe {
-                    // Increment counter in the state.
-                    sodium_increment(
-                        self.state.as_mut_ptr().add(KEYBYTES + LONG_NONCE_BYTES),
-                        MESSAGE_COUNTER_BYTES,
-                    );
+        let mut extended_hash_buf = [0u8; SHA512_BYTES];
+        let key_and_nonce = if self.extended_nonce {
+            unsafe {
+                // Increment counter in the state.
+                sodium_increment(
+                    self.state.as_mut_ptr().add(KEYBYTES + LONG_NONCE_BYTES),
+                    MESSAGE_COUNTER_BYTES,
+                );
 
-                    // Hash state to get the key and nonce for this chunk.
-                    hash_sha512(
-                        hash_buf.as_mut_ptr(),
-                        self.state.as_ptr(),
-                        self.state.len() as c_ulonglong,
-                    );
-                }
-                hash_buf
-            } else {
-                // Regular nonce: increment it.
-                unsafe {
-                    sodium_increment(self.state.as_mut_ptr().add(KEYBYTES), NONCE_BYTES);
-                }
-                self.state
-            };
-
-            let rc = unsafe {
-                // NOTE: Decryption happens in-place.
-                aes256gcm_decrypt(
-                    chunk.buffer.as_mut_ptr(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    chunk.buffer.as_ptr(),
-                    ciphertext_len as c_ulonglong,
-                    adata.as_ptr(),
-                    adata.len() as c_ulonglong,
-                    key_and_nonce.as_ptr().add(KEYBYTES),
-                    key_and_nonce.as_ptr(),
-                )
-            };
-            if rc != 0 {
-                return Err(MyError::DecryptionError("Invalid data".into()).into());
+                // Hash state to get the key and nonce for this chunk.
+                hash_sha512(
+                    extended_hash_buf.as_mut_ptr(),
+                    self.state.as_ptr(),
+                    self.state.len() as c_ulonglong,
+                );
             }
+            extended_hash_buf
+        } else {
+            // Regular nonce: increment it.
+            unsafe {
+                sodium_increment(self.state.as_mut_ptr().add(KEYBYTES), NONCE_BYTES);
+            }
+            self.state
+        };
 
-            chunk.buffer.truncate(ciphertext_len - ABYTES);
-            output.send(chunk)?;
+        let rc = unsafe {
+            // NOTE: Decryption happens in-place.
+            aes256gcm_decrypt(
+                chunk.buffer.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                chunk.buffer.as_ptr(),
+                ciphertext_len as c_ulonglong,
+                adata.as_ptr(),
+                adata.len() as c_ulonglong,
+                key_and_nonce.as_ptr().add(KEYBYTES),
+                key_and_nonce.as_ptr(),
+            )
+        };
+        if rc != 0 {
+            return Err(MyError::DecryptionError("Invalid data".into()).into());
         }
-        Ok(())
+
+        chunk.buffer.truncate(ciphertext_len - ABYTES);
+        Ok(chunk)
     }
 }
