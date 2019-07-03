@@ -1,5 +1,3 @@
-use std::os::raw::{c_ulonglong, c_void};
-
 use failure::Fallible;
 use libsodium_sys::{
     crypto_aead_aes256gcm_decrypt as aes256gcm_decrypt,
@@ -113,7 +111,7 @@ impl Aes256GcmEncoder {
         // Create a random nonce.
         let nonce_len = header_size(extended_nonce);
         let mut nonce = vec![0u8; nonce_len];
-        unsafe { randombytes_buf(nonce.as_mut_ptr() as *mut c_void, nonce_len) };
+        unsafe { randombytes_buf(nonce.as_mut_ptr() as *mut std::ffi::c_void, nonce_len) };
 
         // Create algorithm state from long nonce and key. message counter starts with 0.
         let mut state = [0u8; STATE_BYTES];
@@ -158,7 +156,7 @@ impl StreamConverter for Aes256GcmEncoder {
                 let rc = hash_sha512(
                     extended_hash_buf.as_mut_ptr(),
                     self.state.as_ptr(),
-                    self.state.len() as c_ulonglong,
+                    self.state.len() as u64,
                 );
                 assert_eq!(rc, 0);
             }
@@ -172,22 +170,24 @@ impl StreamConverter for Aes256GcmEncoder {
         };
 
         let adata = chunk.authentication_data.take().unwrap_or_default();
+        let mut output_len: u64 = 0;
 
         let rc = unsafe {
             // Use the key and nonce for this chunk. NOTE: Encryption happens in-place.
             aes256gcm_encrypt(
                 chunk.buffer.as_mut_ptr(),
-                std::ptr::null_mut(),
+                &mut output_len,
                 chunk.buffer.as_ptr(),
-                plaintext_len as c_ulonglong,
+                plaintext_len as u64,
                 adata.as_ptr(),
-                adata.len() as c_ulonglong,
-                std::ptr::null(),
+                adata.len() as u64,
+                std::ptr::null(), // nsec: must be null
                 key_and_nonce.as_ptr().add(KEYBYTES),
                 key_and_nonce.as_ptr(),
             )
         };
         assert_eq!(rc, 0); // Encryption should always succeed.
+        assert_eq!(output_len as usize, plaintext_len + ABYTES);
 
         Ok(chunk)
     }
@@ -251,7 +251,7 @@ impl StreamConverter for Aes256GcmDecoder {
                 let rc = hash_sha512(
                     extended_hash_buf.as_mut_ptr(),
                     self.state.as_ptr(),
-                    self.state.len() as c_ulonglong,
+                    self.state.len() as u64,
                 );
                 assert_eq!(rc, 0);
             }
@@ -264,16 +264,17 @@ impl StreamConverter for Aes256GcmDecoder {
             self.state
         };
 
+        let mut output_len: u64 = 0;
         let rc = unsafe {
             // NOTE: Decryption happens in-place.
             aes256gcm_decrypt(
                 chunk.buffer.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                &mut output_len,
+                std::ptr::null_mut(), // nsec: must be null.
                 chunk.buffer.as_ptr(),
-                ciphertext_len as c_ulonglong,
+                ciphertext_len as u64,
                 adata.as_ptr(),
-                adata.len() as c_ulonglong,
+                adata.len() as u64,
                 key_and_nonce.as_ptr().add(KEYBYTES),
                 key_and_nonce.as_ptr(),
             )
@@ -281,6 +282,7 @@ impl StreamConverter for Aes256GcmDecoder {
         if rc != 0 {
             return Err(MyError::DecryptionError("Invalid data".into()).into());
         }
+        assert_eq!(output_len as usize, ciphertext_len - ABYTES);
 
         chunk.buffer.truncate(ciphertext_len - ABYTES);
         Ok(chunk)

@@ -1,5 +1,3 @@
-use std::os::raw::c_ulonglong;
-
 use failure::Fallible;
 use libsodium_sys::{
     crypto_secretstream_xchacha20poly1305_init_pull as init_pull,
@@ -77,12 +75,12 @@ impl StreamConverter for XChaCha20Encoder {
 
         let plaintext_len = chunk.buffer.len() - chunk.offset;
         chunk.buffer.resize(chunk.buffer.len() + SUFFIX_SIZE, 0);
-        let tag = if chunk.is_last_chunk {
+        let tag: u8 = if chunk.is_last_chunk {
             TAG_FINAL
         } else {
             TAG_MESSAGE
-        } as u8;
-
+        };
+        let mut output_len: u64 = 0;
         let adata = chunk.authentication_data.take().unwrap_or_default();
 
         let rc = unsafe {
@@ -92,15 +90,16 @@ impl StreamConverter for XChaCha20Encoder {
             stream_push(
                 &mut self.state,
                 chunk.buffer.as_mut_ptr().add(chunk.offset - PREFIX_SIZE),
-                std::ptr::null_mut(),
+                &mut output_len,
                 chunk.buffer.as_ptr().add(chunk.offset),
-                plaintext_len as c_ulonglong,
+                plaintext_len as u64,
                 adata.as_ptr(),
-                adata.len() as c_ulonglong,
+                adata.len() as u64,
                 tag,
             )
         };
         assert_eq!(rc, 0); // stream_push should always succeed.
+        assert_eq!(output_len as usize, plaintext_len + ABYTES);
 
         chunk.offset -= PREFIX_SIZE;
         Ok(chunk)
@@ -146,7 +145,8 @@ impl StreamConverter for XChaCha20Decoder {
         if chunk_size < ABYTES {
             return Err(MyError::DecryptionError("Chunk too small to be valid".into()).into());
         }
-        let mut tag: u8 = unsafe { std::mem::zeroed() };
+        let mut tag: u8 = 0;
+        let mut output_len: u64 = 0;
         let adata = chunk.authentication_data.take().unwrap_or_default();
 
         let rc = unsafe {
@@ -156,12 +156,12 @@ impl StreamConverter for XChaCha20Decoder {
             stream_pull(
                 &mut self.state,
                 chunk.buffer.as_mut_ptr().add(chunk.offset + PREFIX_SIZE),
-                std::ptr::null_mut(),
+                &mut output_len,
                 &mut tag,
                 chunk.buffer.as_ptr().add(chunk.offset),
-                chunk_size as c_ulonglong,
+                chunk_size as u64,
                 adata.as_ptr(),
-                adata.len() as c_ulonglong,
+                adata.len() as u64,
             )
         };
         if rc != 0 {
@@ -170,6 +170,7 @@ impl StreamConverter for XChaCha20Decoder {
         if (tag == TAG_FINAL) != chunk.is_last_chunk {
             return Err(MyError::DecryptionError("Last chunk is not finalized".into()).into());
         }
+        assert_eq!(output_len as usize, chunk_size - ABYTES);
 
         chunk.buffer.truncate(chunk.buffer.len() - SUFFIX_SIZE);
         chunk.offset += PREFIX_SIZE;
