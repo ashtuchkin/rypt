@@ -12,7 +12,7 @@ pub use crate::runtime_env::{Reader, RuntimeEnvironment, Writer};
 use crate::streaming_core::stream_convert_to_completion;
 use failure::{bail, Fallible, ResultExt};
 
-mod encoding;
+mod encryption_algorithms;
 mod errors;
 mod header;
 mod key_derivation;

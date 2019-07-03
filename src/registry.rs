@@ -1,6 +1,6 @@
 use failure::Fallible;
 
-use crate::encoding::{Aes256Gcm, XChaCha20};
+use crate::encryption_algorithms::{Aes256Gcm, XChaCha20};
 use crate::errors::MyError;
 use crate::header::{Aes256gcmConfig, EncryptionAlgorithm, FileHeader, PasswordDerivation};
 use crate::key_derivation::SCryptSalsa208SHA256;
