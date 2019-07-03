@@ -145,9 +145,7 @@ impl StreamConverter for Aes256GcmEncoder {
 
         chunk.buffer.resize(plaintext_len + ABYTES, 0);
 
-        let adata = chunk.authentication_data.take().unwrap_or_default();
-
-        let mut extended_hash_buf = [0u8; SHA512_BYTES];
+        let extended_hash_buf = &mut [0u8; SHA512_BYTES];
         let key_and_nonce = if self.extended_nonce {
             unsafe {
                 // Increment counter in the state.
@@ -157,22 +155,25 @@ impl StreamConverter for Aes256GcmEncoder {
                 );
 
                 // Hash state to get the key and nonce for this chunk.
-                hash_sha512(
+                let rc = hash_sha512(
                     extended_hash_buf.as_mut_ptr(),
                     self.state.as_ptr(),
                     self.state.len() as c_ulonglong,
                 );
+                assert_eq!(rc, 0);
             }
-            extended_hash_buf
+            &extended_hash_buf[..KEYBYTES + NONCE_BYTES]
         } else {
             // Regular nonce: increment it.
             unsafe {
                 sodium_increment(self.state.as_mut_ptr().add(KEYBYTES), NONCE_BYTES);
             }
-            self.state
+            &self.state
         };
 
-        unsafe {
+        let adata = chunk.authentication_data.take().unwrap_or_default();
+
+        let rc = unsafe {
             // Use the key and nonce for this chunk. NOTE: Encryption happens in-place.
             aes256gcm_encrypt(
                 chunk.buffer.as_mut_ptr(),
@@ -184,8 +185,9 @@ impl StreamConverter for Aes256GcmEncoder {
                 std::ptr::null(),
                 key_and_nonce.as_ptr().add(KEYBYTES),
                 key_and_nonce.as_ptr(),
-            );
-        }
+            )
+        };
+        assert_eq!(rc, 0); // Encryption should always succeed.
 
         Ok(chunk)
     }
@@ -246,11 +248,12 @@ impl StreamConverter for Aes256GcmDecoder {
                 );
 
                 // Hash state to get the key and nonce for this chunk.
-                hash_sha512(
+                let rc = hash_sha512(
                     extended_hash_buf.as_mut_ptr(),
                     self.state.as_ptr(),
                     self.state.len() as c_ulonglong,
                 );
+                assert_eq!(rc, 0);
             }
             extended_hash_buf
         } else {

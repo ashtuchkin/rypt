@@ -53,7 +53,8 @@ impl XChaCha20Encoder {
         let mut header = vec![0u8; HEADERBYTES];
         let state: StreamState = unsafe {
             let mut state: StreamState = std::mem::zeroed();
-            init_push(&mut state, header.as_mut_ptr(), key.as_ptr()); // NOTE: init_push always succeeds.
+            let rc = init_push(&mut state, header.as_mut_ptr(), key.as_ptr());
+            assert_eq!(rc, 0); // init_push should always succeed.
             state
         };
         Ok((XChaCha20Encoder { state }, header))
@@ -84,8 +85,7 @@ impl StreamConverter for XChaCha20Encoder {
 
         let adata = chunk.authentication_data.take().unwrap_or_default();
 
-        unsafe {
-            // NOTE: `stream_push` always succeeds.
+        let rc = unsafe {
             // NOTE: The buffer is encoded in-place. This is only possible due to the pointer shift
             // made by PREFIX_SIZE. (see function's internals at https://github.com/jedisct1/libsodium/blob/1.0.18/src/libsodium/crypto_secretstream/xchacha20poly1305/secretstream_xchacha20poly1305.c#L147
             // and the fact that crypto_stream_chacha20_ietf_xor_ic can do encryption in-place: https://libsodium.gitbook.io/doc/advanced/stream_ciphers/xchacha20#usage)
@@ -98,8 +98,10 @@ impl StreamConverter for XChaCha20Encoder {
                 adata.as_ptr(),
                 adata.len() as c_ulonglong,
                 tag,
-            );
-        }
+            )
+        };
+        assert_eq!(rc, 0); // stream_push should always succeed.
+
         chunk.offset -= PREFIX_SIZE;
         Ok(chunk)
     }
