@@ -1,7 +1,7 @@
 use std::io::{ErrorKind, Read, Write};
 use std::thread;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, RecvError, Sender};
 use failure::Fallible;
 
 use crate::errors::MyError;
@@ -27,14 +27,15 @@ pub fn stream_convert_to_completion(
     let (codec_sender, write_receiver) = crossbeam_channel::unbounded();
     let (write_sender, final_receiver) = crossbeam_channel::unbounded();
 
-    // Threads
-    let read_thread = thread::spawn(move || read_stream(input_stream, read_receiver, read_sender));
+    // Spawn worker threads
+    let reader_thread =
+        thread::spawn(move || read_stream(input_stream, read_receiver, read_sender));
     let codec_thread =
         thread::spawn(move || convert_stream(stream_converter, codec_receiver, codec_sender));
-    let write_thread =
+    let writer_thread =
         thread::spawn(move || write_stream(output_stream, write_receiver, write_sender));
 
-    // Send initial buffers in to start the pipeline.
+    // Send initial buffers in to kickstart the pipeline.
     let input_buffer_size = input_chunk_offset + chunk_size + input_chunk_asize;
     let buffer_capacity =
         input_chunk_offset + chunk_size + std::cmp::max(input_chunk_asize, output_chunk_asize) + 1; // +1 byte to allow reader to check Eof
@@ -54,22 +55,28 @@ pub fn stream_convert_to_completion(
     // Wait while data flows through the pipeline, resupplying used buffers back to the reader.
     let mut written_bytes = 0usize;
     for mut chunk in final_receiver {
+        // Call progress callback
         written_bytes += chunk.buffer.len() - chunk.offset;
         progress_cb(written_bytes);
-        if chunk.buffer.capacity() == buffer_capacity {
-            chunk.offset = input_chunk_offset;
-            chunk.buffer.resize(input_buffer_size, 0);
-            initial_sender.send(chunk).ok(); // Ok to drop vectors when reading has stopped.
-        }
+
+        // Reset the chunk
+        chunk.offset = input_chunk_offset;
+        chunk.buffer.resize(input_buffer_size, 0);
+        assert_eq!(chunk.buffer.capacity(), buffer_capacity);
+
+        // Send it back to the pipeline; ok to drop vectors when reading has stopped.
+        initial_sender.send(chunk).ok();
     }
 
-    write_thread
+    writer_thread
         .join()
         .map_err(|_| MyError::ThreadJoinError)??;
     codec_thread
         .join()
         .map_err(|_| MyError::ThreadJoinError)??;
-    read_thread.join().map_err(|_| MyError::ThreadJoinError)??;
+    reader_thread
+        .join()
+        .map_err(|_| MyError::ThreadJoinError)??;
     Ok(())
 }
 
@@ -94,8 +101,9 @@ fn read_stream(
                     if read_bytes > 0 {
                         // Continue reading into the buffer, adjusting the slices.
                         read_ptr += read_bytes;
+                        continue;
                     } else {
-                        // Reached end of file. Send the last chunk.
+                        // Reached end of stream. Send the last chunk and exit.
                         chunk.buffer.truncate(read_ptr);
                         chunk.is_last_chunk = true;
                         output.send(chunk)?;
@@ -103,10 +111,10 @@ fn read_stream(
                     }
                 }
                 Err(e) => {
-                    if e.kind() != ErrorKind::Interrupted {
-                        return Err(e.into());
+                    if e.kind() == ErrorKind::Interrupted {
+                        continue; // Retry when interrupted
                     }
-                    // Retry when interrupted
+                    return Err(e.into());
                 }
             }
         }
@@ -116,7 +124,7 @@ fn read_stream(
         chunk.is_last_chunk = false;
         output.send(chunk)?;
     }
-    Err(std::io::Error::from(ErrorKind::NotConnected).into())
+    Err(RecvError.into())
 }
 
 fn convert_stream(
