@@ -2,24 +2,43 @@ syntax = "proto3";
 
 package rypt;
 
-// Main data structure, representing the file header for encrypted files. Note, the header itself is not encrypted (as
-// the parameters in it are needed for decryption), but it is authenticated via AEAD encryption algorithm.
+// 'rypt' format file header. Note, the header itself is not encrypted (as its contents are needed for decryption),
+// but it is always authenticated via the AEAD encryption algorithm.
 message FileHeader {
+    // Which AEAD algorithm to use and corresponding config. Required.
     oneof encryption_algorithm {
         XChaCha20Poly1305Config xchacha20_poly1305 = 1;
         AES256GCMConfig aes256_gcm = 2;
+        // ids 3, 4, 5 are reserved for future algorithms.
     }
-    bytes encryption_nonce = 7;  // Per-file randomness data, similar to the password derivation salt.
 
+    // AEAD algorithm per-file randomness data, similar to the password derivation salt.
+    bytes encryption_nonce = 6;
+
+    // User-supplied additional non-encrypted data that will be authenticated together with the rest of
+    // the file. Optional.
+    bytes associated_data = 7;
+
+    // Length in bytes of plaintext 'chunks' that we're encrypting and authenticating in order. The source file/stream
+    // has to be split into chunks to avoid having to read all the contents into memory. All chunks have the same
+    // length except the last one, which might be smaller.
+    // NOTE: Corresponding chunks in encrypted file are usually larger, to accommodate MAC codes. This additional size
+    // depends on the algorithm.
+    uint64 chunk_size = 8;
+
+    // Parameters of a secret key derivation algorithm that was used when encrypting this file. Both password-
+    // hashing and public-key exchange are supported. Empty if the secret key was provided directly.
     oneof key_derivation {
-        SCryptConfig scrypt = 8;
+        // Argon2Config argon2 = 9;
+        SCryptConfig scrypt = 10;
+        // X25519PublicKeyConfig x25519_public_key = 11;
     }
-    //bytes password_derivation_salt = 15;
 }
 
 
+// NOTE: We use Scrypt algorithm as implemented by libsodium `crypto_pwhash_scryptsalsa208sha256()` function.
 message SCryptConfig {
-    bytes salt = 1;
+    bytes salt = 1;  // 32 bytes.
     uint64 opslimit = 2;
     uint64 memlimit = 3;
 }
@@ -28,5 +47,5 @@ message XChaCha20Poly1305Config {
 }
 
 message AES256GCMConfig {
-    bool extended_nonce = 2;
+    bool extended_nonce = 1;
 }

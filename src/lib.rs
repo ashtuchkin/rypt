@@ -5,12 +5,13 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use failure::{bail, Fallible, ResultExt};
+
 use crate::errors::MyError;
-use crate::header::{read_header, write_header, FileHeader, UserdataState};
+use crate::header::{read_header, write_header, FileHeader};
 use crate::progress::ProgressPrinter;
 pub use crate::runtime_env::{Reader, RuntimeEnvironment, Writer};
 use crate::streaming_core::stream_convert_to_completion;
-use failure::{bail, Fallible, ResultExt};
 
 mod encryption_algorithms;
 mod errors;
@@ -255,14 +256,9 @@ fn encrypt_file(
 
     let (encryption_nonce, stream_converter) = codec.start_encoding(&key)?;
     file_header.encryption_nonce = encryption_nonce;
+    file_header.chunk_size = chunk_size as u64;
 
-    let header_buf = write_header(
-        &mut output_stream,
-        &file_header,
-        UserdataState::None,
-        None,
-        chunk_size,
-    )?;
+    let header_buf = write_header(&mut output_stream, &file_header)?;
 
     stream_convert_to_completion(
         stream_converter,
@@ -303,7 +299,7 @@ fn decrypt_file(
     let (mut input_stream, output_stream, filesize) = open_streams(input_path, &output_path, &env)?;
     progress_printer.set_filesize(filesize);
 
-    let (file_header, header_buf, _userdata_state, chunk_size) = read_header(&mut input_stream)?;
+    let (file_header, header_buf) = read_header(&mut input_stream)?;
 
     let codec = registry::codec_from_header(&file_header)?;
     let codec_config = codec.get_config();
@@ -315,7 +311,7 @@ fn decrypt_file(
         stream_converter,
         input_stream,
         output_stream,
-        chunk_size,
+        file_header.chunk_size as usize,
         Some(header_buf),
         &mut |bytes| progress_printer.print_progress(bytes),
     )?;
