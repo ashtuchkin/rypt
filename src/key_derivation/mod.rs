@@ -1,2 +1,2 @@
-mod scryptsalsa208;
-pub use scryptsalsa208::SCryptSalsa208SHA256;
+mod scrypt;
+pub use scrypt::SCrypt;

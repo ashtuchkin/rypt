@@ -2,17 +2,15 @@ use failure::Fallible;
 
 use crate::encryption_algorithms::{Aes256Gcm, XChaCha20};
 use crate::errors::MyError;
-use crate::header::{Aes256gcmConfig, EncryptionAlgorithm, FileHeader, PasswordDerivation};
-use crate::key_derivation::SCryptSalsa208SHA256;
+use crate::header::{Aes256gcmConfig, EncryptionAlgorithm, FileHeader, KeyDerivation};
+use crate::key_derivation::SCrypt;
 use crate::types::{KeyDerivationFunction, StreamCodec};
 
 pub fn header_from_command_line(algorithm: &Option<String>) -> Fallible<FileHeader> {
     // Start with default values.
     let mut header = FileHeader {
         encryption_algorithm: Some(EncryptionAlgorithm::Xchacha20Poly1305(Default::default())),
-        password_derivation: Some(PasswordDerivation::ScryptSalsa208Sha256(
-            SCryptSalsa208SHA256::default_config_random_seed(),
-        )),
+        key_derivation: Some(KeyDerivation::Scrypt(SCrypt::default_config_random_seed())),
         ..Default::default()
     };
 
@@ -46,10 +44,8 @@ pub fn codec_from_header(file_header: &FileHeader) -> Fallible<Box<StreamCodec>>
 pub fn key_derivation_from_header(
     file_header: &FileHeader,
 ) -> Fallible<Box<KeyDerivationFunction>> {
-    match &file_header.password_derivation {
+    match &file_header.key_derivation {
         None => Err(MyError::InvalidHeader("Unfilled key derivation data".into()).into()),
-        Some(PasswordDerivation::ScryptSalsa208Sha256(config)) => {
-            Ok(Box::new(SCryptSalsa208SHA256::new(config)?))
-        }
+        Some(KeyDerivation::Scrypt(config)) => Ok(Box::new(SCrypt::new(config)?)),
     }
 }

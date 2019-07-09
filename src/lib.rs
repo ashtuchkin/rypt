@@ -253,8 +253,8 @@ fn encrypt_file(
     // NOTE: This takes some non-trivial time, depending on the derivation function (> 40 ms).
     let key = derive_key(&file_header, codec_config.key_size, &opts)?;
 
-    let (encryption_header, stream_converter) = codec.start_encoding(&key)?;
-    file_header.encryption_header = encryption_header;
+    let (encryption_nonce, stream_converter) = codec.start_encoding(&key)?;
+    file_header.encryption_nonce = encryption_nonce;
 
     let header_buf = write_header(
         &mut output_stream,
@@ -309,7 +309,7 @@ fn decrypt_file(
     let codec_config = codec.get_config();
     let key = derive_key(&file_header, codec_config.key_size, &opts)?;
 
-    let stream_converter = codec.start_decoding(&key, &file_header.encryption_header)?;
+    let stream_converter = codec.start_decoding(&key, &file_header.encryption_nonce)?;
 
     stream_convert_to_completion(
         stream_converter,

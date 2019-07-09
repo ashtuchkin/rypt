@@ -40,6 +40,7 @@ See also discussion in https://libsodium.gitbook.io/doc/secret-key_cryptography/
 
 If that estimate is not enough, we can use a nonce extension algorithm as described in
 https://libsodium.gitbook.io/doc/secret-key_cryptography/encrypted-messages#short-nonces
+https://libsodium.gitbook.io/doc/key_derivation#nonce-extension
     * Generate a much longer random nonce N (we use 192 bits = 24 bytes), save it in the file header.
     * Keep a 64 bit counter of messages I.
     * For each message, increment I, then use (key, nonce) = HASH(I || N || K), where K is the original key.

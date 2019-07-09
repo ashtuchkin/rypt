@@ -1,5 +1,41 @@
+Undecided:
+ * Add Argon as a key derivation function crypto_pwhash_argon2i
+ * Add Public Key algorithms
+    * Generate keys: 
+        private_key = random 32 bytes; (or crypto_hash_sha512 of seed)
+        public_key = crypto_scalarmult_curve25519_base(private_key)  (also 32 bytes)
+    * crypto_box_easy:
+        K = crypto_core_hchacha20(crypto_scalarmult_curve25519(pk, sk))  (beforenm)
+        crypto_secretbox_xsalsa20poly1305(K)  (afternm) or crypto_secretbox_xchacha20poly1305_detached (mac prepended)
+    * crypto_box_seal:
+        Generate pk1, sk1 using crypto_box_keypair
+        nonce = crypto_generichash(pk1 || pk)   (BLAKE2b)
+        c = pk1 || crypto_box_easy(msg, pk, sk1, nonce)
+    * crypto_kx_client_session_keys:
+        rx || tx = BLAKE2B-512(crypto_scalarmult_curve25519(client_sk, server_pk) || client_pk || server_pk)
+        
+    * What needs to be done:
+      * Command line arguments providing receiver public key (required) and my private key (optional)
+         * Plus, a command line mode to generate private/public key pair.
+      * Encryption: 
+         * If only receiver public key given, use 'seal' construct.
+            Question: Generate different keypair for each chunk (slow & will need to prepend pk1 to each chunk), or 
+                      have a single keypair and use regular nonces, etc.? In this case only one pk1 would need to be
+                      stored -> latter
+         * If my private key is supplied, use regular box construct.
+            Question: Use crypto_box_curve25519xchacha20poly1305_easy_afternm, secretstream with K or just any AEAD algo? 
+                      Not standard, but provides authentication of header -> latter
+                      Also an option - use kx_ functions, but that seems to be overkill
+            Question: Store sender public key? - would make decryption easier, but reveals sender in plaintext. -> Yes.
+      * Decryption:
+         * Just my private key is required, unless we skipped storing sender public key.
+      Question: do we change the header structure? It could be "Key derivation:" "Curve25519", with pk1 as an internal
+                parameter. -> Yes.
+   
+ * Review our nonce extension algorithm vs crypto_core_hchacha20 https://libsodium.gitbook.io/doc/key_derivation#nonce-extension
+
+
 P0:
- * Convert header to a real .proto file.
  * Implement the new file format, with tests.
  * Read password from stdin
    * Twice for encrypt, once for decrypt

@@ -2,22 +2,23 @@ syntax = "proto3";
 
 package rypt;
 
-// Main protobuf, representing file header.
+// Main data structure, representing the file header for encrypted files. Note, the header itself is not encrypted (as
+// the parameters in it are needed for decryption), but it is authenticated via AEAD encryption algorithm.
 message FileHeader {
     oneof encryption_algorithm {
         XChaCha20Poly1305Config xchacha20_poly1305 = 1;
         AES256GCMConfig aes256_gcm = 2;
     }
-    bytes encryption_header = 7;  // Per-file randomness data, similar to the password derivation salt.
+    bytes encryption_nonce = 7;  // Per-file randomness data, similar to the password derivation salt.
 
-    oneof password_derivation {
-        SCryptSalsa208SHA256Config scrypt_salsa208_sha256 = 8;
+    oneof key_derivation {
+        SCryptConfig scrypt = 8;
     }
     //bytes password_derivation_salt = 15;
 }
 
 
-message SCryptSalsa208SHA256Config {
+message SCryptConfig {
     bytes salt = 1;
     uint64 opslimit = 2;
     uint64 memlimit = 3;
