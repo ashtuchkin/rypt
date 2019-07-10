@@ -79,15 +79,15 @@ pub fn stream_convert_to_completion(
 
     // Wait for the threads to finish. They are guaranteed to do that because input channels are all
     // closed now.
-    let results = vec![
+    let join_results = vec![
         (reader_thread.join(), "Reading"),
         (codec_thread.join(), "Encryption"),
         (writer_thread.join(), "Writing"),
     ];
 
-    // Process and re-raise any encountered errors. We expect at most one real error to happen in
-    // vast majority of cases, so just return the first one.
-    for (join_res, operation) in results {
+    // Process and re-raise any errors/panics in worker threads. We expect at most one real error to
+    // happen in the vast majority of cases, so just return the first one.
+    for (join_res, operation) in join_results {
         match join_res {
             Ok(thread_result) => match thread_result {
                 // Successful termination
