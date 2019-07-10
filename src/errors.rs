@@ -18,8 +18,8 @@ pub enum MyError {
     #[fail(display = "Invalid header protobuf: {}", _0)]
     InvalidHeaderProto(#[cause] DecodeError),
 
-    #[fail(display = "Thread Join Error")]
-    ThreadJoinError,
+    #[fail(display = "{} thread panic", _0)]
+    WorkerThreadPanic(String),
 
     #[fail(display = "Unknown encoding algorithm: {}", _0)]
     UnknownAlgorithm(String),

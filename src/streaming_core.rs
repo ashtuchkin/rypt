@@ -1,11 +1,13 @@
 use std::io::{ErrorKind, Read, Write};
 use std::thread;
 
-use crossbeam_channel::{Receiver, RecvError, Sender};
+use crossbeam_channel::{Receiver, SendError, Sender};
 use failure::Fallible;
 
 use crate::errors::MyError;
 use crate::types::{Chunk, ChunkConfig, StreamConverter};
+
+const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in channels.
 
 pub fn stream_convert_to_completion(
     stream_converter: Box<StreamConverter>,
@@ -21,62 +23,94 @@ pub fn stream_convert_to_completion(
         output_chunk_asize,
     } = stream_converter.get_chunk_config();
 
-    // Channels
-    let (initial_sender, read_receiver) = crossbeam_channel::unbounded();
-    let (read_sender, codec_receiver) = crossbeam_channel::unbounded();
-    let (codec_sender, write_receiver) = crossbeam_channel::unbounded();
-    let (write_sender, final_receiver) = crossbeam_channel::unbounded();
+    // Channels between worker threads. Capacities are all set to 1 to minimize buffering while
+    // still allowing parallelization.
+    let (initial_sender, read_receiver) = crossbeam_channel::bounded(1);
+    let (read_sender, codec_receiver) = crossbeam_channel::bounded(1);
+    let (codec_sender, write_receiver) = crossbeam_channel::bounded(1);
+    let (write_sender, final_receiver) = crossbeam_channel::bounded(1);
 
     // Spawn worker threads
-    let reader_thread =
-        thread::spawn(move || read_stream(input_stream, read_receiver, read_sender));
-    let codec_thread =
-        thread::spawn(move || convert_stream(stream_converter, codec_receiver, codec_sender));
-    let writer_thread =
-        thread::spawn(move || write_stream(output_stream, write_receiver, write_sender));
+    let reader_thread = thread::Builder::new()
+        .name("stream reader".into())
+        .spawn(move || read_stream(input_stream, read_receiver, read_sender))?;
+    let codec_thread = thread::Builder::new()
+        .name("encryption/decryption".into())
+        .spawn(move || convert_stream(stream_converter, codec_receiver, codec_sender))?;
+    let writer_thread = thread::Builder::new()
+        .name("stream writer".into())
+        .spawn(move || write_stream(output_stream, write_receiver, write_sender))?;
 
-    // Send initial buffers in to kickstart the pipeline.
+    // Create and send initial chunks to kickstart the pipeline.
     let input_buffer_size = input_chunk_offset + chunk_size + input_chunk_asize;
     let buffer_capacity =
         input_chunk_offset + chunk_size + std::cmp::max(input_chunk_asize, output_chunk_asize) + 1; // +1 byte to allow reader to check Eof
-    for _ in 0..5 {
+    for _ in 0..NUM_CHUNKS_IN_PIPELINE {
         let mut buffer = vec![0u8; buffer_capacity];
         buffer.truncate(input_buffer_size);
-        initial_sender
-            .send(Chunk {
-                buffer,
-                offset: input_chunk_offset,
-                is_last_chunk: false,
-                authentication_data: authentication_data.take(), // Only provide auth data to the first chunk
-            })
-            .ok();
+        let chunk = Chunk {
+            buffer,
+            offset: input_chunk_offset,
+            is_last_chunk: false,
+            authentication_data: authentication_data.take(), // Only provide auth data to the first chunk
+        };
+        initial_sender.send(chunk).ok();
     }
 
-    // Wait while data flows through the pipeline, resupplying used buffers back to the reader.
+    // Wait while data flows through the pipeline, resupplying used chunks back to the reader.
     let mut written_bytes = 0usize;
     for mut chunk in final_receiver {
-        // Call progress callback
         written_bytes += chunk.buffer.len() - chunk.offset;
-        progress_cb(written_bytes);
 
         // Reset the chunk
         chunk.offset = input_chunk_offset;
         chunk.buffer.resize(input_buffer_size, 0);
         assert_eq!(chunk.buffer.capacity(), buffer_capacity);
 
-        // Send it back to the pipeline; ok to drop vectors when reading has stopped.
+        // Send it back to the pipeline; ok to drop vectors if reading has stopped.
         initial_sender.send(chunk).ok();
+
+        // Call progress callback after sending, to avoid slowing down the pipe.
+        progress_cb(written_bytes);
     }
 
-    writer_thread
-        .join()
-        .map_err(|_| MyError::ThreadJoinError)??;
-    codec_thread
-        .join()
-        .map_err(|_| MyError::ThreadJoinError)??;
-    reader_thread
-        .join()
-        .map_err(|_| MyError::ThreadJoinError)??;
+    // Propagate termination state back to the beginning of the pipeline, forcing reader to exit.
+    std::mem::drop(initial_sender);
+
+    // Wait for the threads to finish. They are guaranteed to do that because input channels are all
+    // closed now.
+    let results = vec![
+        (reader_thread.join(), "Reading"),
+        (codec_thread.join(), "Encryption"),
+        (writer_thread.join(), "Writing"),
+    ];
+
+    // Process and re-raise any encountered errors. We expect at most one real error to happen in
+    // vast majority of cases, so just return the first one.
+    for (join_res, operation) in results {
+        match join_res {
+            Ok(thread_result) => match thread_result {
+                // Successful termination
+                Ok(_) => {}
+
+                Err(e) => match e.downcast::<SendError<Chunk>>() {
+                    // SendError<Chunk> is not a error - it's an early termination sign; skip it.
+                    Ok(_) => {}
+
+                    // Add context to a valid error that happened in the thread.
+                    Err(err) => {
+                        let message = format!("{} error: {}", operation, err);
+                        return Err(err.context(message).into());
+                    }
+                },
+            },
+
+            // Handle thread panic. Theoretically we can extract the message via Any::downcast
+            // (payload is usually a &str or String), but it will be written to stderr by default
+            // panic handler anyway, so we don't bother.
+            Err(_) => return Err(MyError::WorkerThreadPanic(operation.to_string()).into()),
+        }
+    }
     Ok(())
 }
 
@@ -124,7 +158,10 @@ fn read_stream(
         chunk.is_last_chunk = false;
         output.send(chunk)?;
     }
-    Err(RecvError.into())
+
+    // NOTE: This can happen if later stages in the pipeline fail and we forcefully close incoming
+    // stream of buffers. Semantically this is a successful exit.
+    Ok(())
 }
 
 fn convert_stream(

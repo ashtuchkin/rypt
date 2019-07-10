@@ -28,8 +28,7 @@
  * Errors: tell which chunk failed.
  * Make progress optional (command line)
  * Create a readme
- * Handle errors from threads.
- * Publish to github, /r/rust, hacker news.
+ * Publish to /r/rust, hacker news.
  * Maybe compare with naive solution?
  * Remove sodiumoxide from deps, and, potentially, structopt (takes too much space)
  
