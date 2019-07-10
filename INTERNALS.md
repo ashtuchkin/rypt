@@ -146,3 +146,12 @@ TODO: Test using more common methods - actually running the executable
    * Either need to add ENV variables , or create pseudo-tty
      * create pseudo-tty with 'nix' crate: use http://man7.org/linux/man-pages/man3/posix_openpt.3.html  (or openpty)
      -> Easier and safer to do ENV variables like MOCK_IS_TTY=stdin,stdout  
+
+# Releases
+Current plan is to use GitHub releases for distribution.
+Travis CI can build the software for all major platforms and then upload it to Github. See:
+  * https://docs.travis-ci.com/user/deployment/releases/
+  * https://docs.travis-ci.com/user/encryption-keys/  - to avoid storing github tokens in the raw.
+  * https://docs.travis-ci.com/user/reference/overview/ - environment reference (linux, mac, windows)
+
+Inspiration: https://medium.com/@kevinkreuzer/the-way-to-fully-automated-releases-in-open-source-projects-44c015f38fd6
