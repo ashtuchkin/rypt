@@ -9,7 +9,30 @@ use crate::types::{Chunk, ChunkConfig, StreamConverter};
 
 const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in channels.
 
-pub fn stream_convert_to_completion(
+/// This function reads data from input_stream, converts it using stream_converter and then writes
+/// converted data to write_stream. It blocks until the data is fully read, converted and written.
+///
+/// To enable parallelism, we create a pipeline with reader, converter and writer threads running
+/// in at the same time, passing around Chunk-s (buffers) of data. Chunk structures are passed
+/// by-value, with full ownership, which removes the need for other thread synchronization
+/// mechanisms, while avoiding the need to copy actual data buffers. To minimize memory allocations,
+/// Chunk-s at the end of the pipeline are redirected back to beginning.
+///
+/// The pipeline looks like this:
+///
+///                   -----------------                -----------------------
+///                   |  Main thread  |  <- Chunks --  |    Writer thread    |  -> Output stream
+///                   -----------------                -----------------------
+///                          |                                    ^
+///                        Chunks                              Chunks
+///                          V                                    |
+///                   -----------------                -----------------------
+/// Input stream  ->  | Reader thread |  -- Chunks ->  | In-place conversion |
+///                   -----------------                -----------------------
+///
+/// Main thread here only supplies initial Chunks to the pipeline, then redirects used Chunks back
+/// to the start of the pipeline. It also calls the progress callback to notify the caller.
+pub fn convert_stream(
     stream_converter: Box<StreamConverter>,
     input_stream: Box<Read + Send>,
     output_stream: Box<Write + Send>,
@@ -23,12 +46,11 @@ pub fn stream_convert_to_completion(
         output_chunk_asize,
     } = stream_converter.get_chunk_config();
 
-    // Channels between worker threads. Capacities are all set to 1 to minimize buffering while
-    // still allowing parallelization.
-    let (initial_sender, read_receiver) = crossbeam_channel::bounded(1);
+    // Channels between worker threads.
+    let (initial_sender, read_receiver) = crossbeam_channel::unbounded();
     let (read_sender, codec_receiver) = crossbeam_channel::bounded(1);
     let (codec_sender, write_receiver) = crossbeam_channel::bounded(1);
-    let (write_sender, final_receiver) = crossbeam_channel::bounded(1);
+    let (write_sender, final_receiver) = crossbeam_channel::unbounded();
 
     // Spawn worker threads
     let reader_thread = thread::Builder::new()
@@ -36,7 +58,7 @@ pub fn stream_convert_to_completion(
         .spawn(move || read_stream(input_stream, read_receiver, read_sender))?;
     let codec_thread = thread::Builder::new()
         .name("encryption/decryption".into())
-        .spawn(move || convert_stream(stream_converter, codec_receiver, codec_sender))?;
+        .spawn(move || convert_chunks(stream_converter, codec_receiver, codec_sender))?;
     let writer_thread = thread::Builder::new()
         .name("stream writer".into())
         .spawn(move || write_stream(output_stream, write_receiver, write_sender))?;
@@ -164,7 +186,7 @@ fn read_stream(
     Ok(())
 }
 
-fn convert_stream(
+fn convert_chunks(
     mut stream_converter: Box<StreamConverter>,
     input: Receiver<Chunk>,
     output: Sender<Chunk>,

@@ -11,7 +11,7 @@ use crate::errors::MyError;
 use crate::header::{read_header, write_header, FileHeader};
 use crate::progress::ProgressPrinter;
 pub use crate::runtime_env::{Reader, RuntimeEnvironment, Writer};
-use crate::streaming_core::stream_convert_to_completion;
+use crate::streaming_core::convert_stream;
 
 mod encryption_algorithms;
 mod errors;
@@ -260,7 +260,7 @@ fn encrypt_file(
 
     let header_buf = write_header(&mut output_stream, &file_header)?;
 
-    stream_convert_to_completion(
+    convert_stream(
         stream_converter,
         input_stream,
         output_stream,
@@ -307,7 +307,7 @@ fn decrypt_file(
 
     let stream_converter = codec.start_decoding(&key, &file_header.encryption_nonce)?;
 
-    stream_convert_to_completion(
+    convert_stream(
         stream_converter,
         input_stream,
         output_stream,

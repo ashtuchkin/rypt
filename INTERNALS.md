@@ -123,6 +123,9 @@ Questions and decisions:
       is enough - no need to supply sender's public key.
     Decision: Default to 2) Yes; provide command line option for 1).
 
+  * What format do we use for private & public keys? 1) binary, 2) base64, 3) hex, 4) auto.
+    Decision: ?
+
 # Testing executable
 TODO: Test using more common methods - actually running the executable
  * std::process only allows piping File to stdin, or going the spawn-write-wait path

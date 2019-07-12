@@ -40,6 +40,7 @@
 # P2
  * Write a blog post about pipelining and compare it to a naive serial solution.
  * Adjustable chunk size (via command line args)
+ * Check for entropy and add warning (see https://libsodium.gitbook.io/doc/usage#sodium_init-stalling-on-linux)
  * Support multithreading for supporting encoders (might be hard to share the state).
  * Migrate to async reading/writing and futures, plus write a post about that too.
  
