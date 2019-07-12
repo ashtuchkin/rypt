@@ -80,9 +80,11 @@ pub fn convert_stream(
     }
 
     // Wait while data flows through the pipeline, resupplying used chunks back to the reader.
-    let mut written_bytes = 0usize;
+    let mut processed_bytes = 0usize;
     for mut chunk in final_receiver {
-        written_bytes += chunk.buffer.len() - chunk.offset;
+        // Calculate the size of the input Chunk that resulted in this output Chunk.
+        processed_bytes +=
+            chunk.buffer.len() - input_chunk_offset - output_chunk_asize + input_chunk_asize;
 
         // Reset the chunk
         chunk.offset = input_chunk_offset;
@@ -92,8 +94,8 @@ pub fn convert_stream(
         // Send it back to the pipeline; ok to drop vectors if reading has stopped.
         initial_sender.send(chunk).ok();
 
-        // Call progress callback after sending, to avoid slowing down the pipe.
-        progress_cb(written_bytes);
+        // Call progress callback after sending the Chunk back, to avoid slowing down the pipe.
+        progress_cb(processed_bytes);
     }
 
     // Propagate termination state back to the beginning of the pipeline, forcing reader to exit.
