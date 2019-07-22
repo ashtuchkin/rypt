@@ -7,7 +7,7 @@ Assumptions:
 ## Cryptography base operations
  * HASH(M) -> H  (H: 32 bytes)
  * HMAC(M, K) -> MAC  (K: 32 bytes, MAC: 32 bytes)
- * SECRETBOX(M, A, K, N) -> C + MAC | UNSECRETBOX(C + MAC, A, K, N) -> M   (K: 32 bytes, N: 24 bytes, MAC: 16 bytes)
+ * SECRETBOX(M, A, K, N) -> C + MAC | UNSECRETBOX(C + MAC, A, K, N) -> M   (K: 32 bytes, N: 12 bytes, MAC: 16 bytes)
  * BOX(M, PK, SK, N) -> C + MAC     | UNBOX(C + MAC, SK, PK, N) -> M   | BOX_KEYPAIR() -> (PK, SK)   (SK/PK: 32 bytes, N: 24 bytes, MAC: 16 bytes)
  * SIGN(M, SK) -> S                 | SIGN_VERIFY(M, S, PK) -> Bool   (SK/PK: 32 bytes, S: 64 bytes)
  * KDF(P, Salt) -> S   (Salt: 16 bytes, S: Any)
@@ -66,7 +66,7 @@ if SenderAuthentication == REPUDIABLE, for all public key recipients:
 ChunkIdx = uint64le, starting with 0 
 FinalFlagByte = 0x01 if final, else 0x00)
  
-AEAD Encrypted chunk (K=PayloadKey, N=PAD(16, "rypt payload")|ChunkIdx, A=(HeaderHash|FinalFlagByte))
+AEAD Encrypted chunk (K=PayloadKey, N="rypt"|ChunkIdx, A=(HeaderHash|FinalFlagByte))
    * If SenderAuthentication == REPUDIABLE: Per-recipient authentication tags
        M = "rypt authentication tag\0"|HeaderHash|ChunkIdx|FinalFlagByte|HASH(Plaintext)
        AuthTag[i] = HMAC(M, K=MAC[i])

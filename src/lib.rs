@@ -13,6 +13,7 @@ use crate::progress::ProgressPrinter;
 pub use crate::runtime_env::{Reader, RuntimeEnvironment, Writer};
 use crate::streaming_core::convert_stream;
 
+mod crypto;
 mod encryption_algorithms;
 mod errors;
 mod header;
@@ -322,6 +323,8 @@ fn decrypt_file(
 }
 
 pub fn run(env: &RuntimeEnvironment) -> i32 {
+    let _ = crypto::instantiate_crypto_system();
+
     let mut stderr = env.stderr.borrow_mut();
     if unsafe { libsodium_sys::sodium_init() } == -1 {
         writeln!(stderr, "{}: {}", PKG_NAME, MyError::InitError).ok();

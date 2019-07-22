@@ -22,9 +22,12 @@ failure = "0.1.*"
 # isatty, clear line, password input
 termion = "1.5.*"
 
+static_assertions = "0.3.*"
+
 [dev-dependencies]
 rand = "0.6.*"
 tempfile = "3.0.*"
+hex-literal = "0.2.*"
 
 [build-dependencies]
 prost-build = "0.5.*"
