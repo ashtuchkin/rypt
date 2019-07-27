@@ -24,7 +24,7 @@ pub fn create_temp_file(rng: &mut RngCore, extension: &str) -> Fallible<(PathBuf
     let temp_file = env::temp_dir()
         .join(random_str(rng, 10))
         .with_extension(extension);
-    let contents = random_bytes(rng, 10_000);
+    let contents = random_bytes(rng, 10_000_000);
     fs::write(&temp_file, &contents)?;
     Ok((temp_file, contents))
 }

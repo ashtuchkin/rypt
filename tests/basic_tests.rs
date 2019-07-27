@@ -1,7 +1,7 @@
 use failure::Fallible;
 use rand::{thread_rng, RngCore};
+use rypt::cli::DEFAULT_FILE_SUFFIX;
 use rypt::util::to_hex_string;
-use rypt::DEFAULT_FILE_SUFFIX;
 use std::fs;
 use util::CommandExt;
 
@@ -39,7 +39,6 @@ fn simple_file_encrypt_decrypt(
     let output = util::main_cmd(&[
         "--secret-key-unsafe",
         &secret_key,
-        "--algorithm",
         algorithm,
         temp_file_path.to_str().unwrap(),
     ])?
@@ -71,22 +70,22 @@ fn simple_file_encrypt_decrypt(
 
 #[test]
 fn simple_file_encrypt_decrypt_with_extension_aes256gcm() -> Fallible<()> {
-    simple_file_encrypt_decrypt(&mut thread_rng(), "bin", "aes256gcm")
+    simple_file_encrypt_decrypt(&mut thread_rng(), "bin", "--fast")
 }
 
 #[test]
 fn simple_file_encrypt_decrypt_without_extension_aes256gcm() -> Fallible<()> {
-    simple_file_encrypt_decrypt(&mut thread_rng(), "", "aes256gcm")
+    simple_file_encrypt_decrypt(&mut thread_rng(), "", "--fast")
 }
 
 #[test]
 fn simple_file_encrypt_decrypt_with_extension_xchacha20() -> Fallible<()> {
-    simple_file_encrypt_decrypt(&mut thread_rng(), "bin", "xchacha20")
+    simple_file_encrypt_decrypt(&mut thread_rng(), "bin", "")
 }
 
 #[test]
 fn simple_file_encrypt_decrypt_without_extension_xchacha20() -> Fallible<()> {
-    simple_file_encrypt_decrypt(&mut thread_rng(), "", "xchacha20")
+    simple_file_encrypt_decrypt(&mut thread_rng(), "", "")
 }
 
 #[test]

@@ -1,28 +1,63 @@
-use crate::crypto::libsodium::AEADAlgorithm;
+pub use crate::crypto::libsodium::AEADAlgorithm;
+use crate::crypto::libsodium::LibSodiumCryptoSystem;
 use failure::Fail;
-use libsodium::LibSodiumCryptoSystem;
 use std::convert::TryInto;
-use std::mem::size_of;
 
 mod libsodium;
 
-pub type HashOutput = [u8; 32];
-pub type HMacOutput = [u8; 32];
-pub type HMacKey = [u8; 32];
-pub type AEADKey = [u8; 32];
-pub type AEADNonce = [u8; 12];
-pub type AEADMac = [u8; 16];
-pub type PublicKey = [u8; 32];
-pub type PrivateKey = [u8; 64];
-pub type BoxNonce = [u8; 24];
-pub type BoxMac = [u8; 16];
-pub type Signature = [u8; 64];
-pub type KdfSalt = [u8; 16];
-pub type KdfOutput = [u8; 32];
+/// CryptoSystem is a set of cryptographical primitives we use in Rypt to provide authenticated
+/// encryption using either passwords, or public/private keys. All functions work with fixed-size
+/// array arguments (i.e. `&[u8; 32]`) and not slices/vectors, for obvious benefits.  
+///
+/// NOTE, in current state, it's rather tightly coupled with libsodium implementation, mostly via
+/// the input/output parameter lengths. It doesn't seem to be easy to decouple this, so we're
+/// keeping it as is, until we introduce a second, non-libsodium implementation (which may never
+/// happen btw).
+///
+/// The lengths are mostly straightforward, with the exception of a rather short AEAD_NONCE_LEN (12
+/// bytes). The main reason to make it this size (and use ChaCha20-IETF algorithm instead of the
+/// XChaCha20) is to keep the interface compatible with a much faster AES256-GCM algorithm.
+/// The usual concerns about short nonce lengths are taken into account at the callsites - the
+/// nonces are deterministic and use counters with different prefixes to ensure uniqueness.
 
-pub const AEAD_MAC_LEN: usize = size_of::<AEADMac>();
-pub const BOX_MAC_LEN: usize = size_of::<BoxMac>();
-pub const SIGNATURE_LEN: usize = size_of::<Signature>();
+pub const HASH_OUTPUT_LEN: usize = 32;
+pub type HashOutput = [u8; HASH_OUTPUT_LEN];
+
+pub const HMAC_OUTPUT_LEN: usize = 32;
+pub type HMacOutput = [u8; HMAC_OUTPUT_LEN];
+
+pub const HMAC_KEY_LEN: usize = 32;
+pub type HMacKey = [u8; HMAC_KEY_LEN];
+
+pub const AEAD_KEY_LEN: usize = 32;
+pub type AEADKey = [u8; AEAD_KEY_LEN];
+
+pub const AEAD_NONCE_LEN: usize = 12;
+pub type AEADNonce = [u8; AEAD_NONCE_LEN];
+
+pub const AEAD_MAC_LEN: usize = 16;
+pub type AEADMac = [u8; AEAD_MAC_LEN];
+
+pub const PUBLIC_KEY_LEN: usize = 32;
+pub type PublicKey = [u8; PUBLIC_KEY_LEN];
+
+pub const PRIVATE_KEY_LEN: usize = 64;
+pub type PrivateKey = [u8; PRIVATE_KEY_LEN];
+
+pub const BOX_NONCE_LEN: usize = 24;
+pub type BoxNonce = [u8; BOX_NONCE_LEN];
+
+pub const BOX_MAC_LEN: usize = 16;
+pub type BoxMac = [u8; BOX_MAC_LEN];
+
+pub const SIGNATURE_LEN: usize = 64;
+pub type Signature = [u8; SIGNATURE_LEN];
+
+pub const KDF_SALT_LEN: usize = 16;
+pub type KdfSalt = [u8; KDF_SALT_LEN];
+
+pub const KDF_OUTPUT_LEN: usize = 32;
+pub type KdfOutput = [u8; KDF_OUTPUT_LEN];
 
 #[derive(Copy, Clone, Debug, PartialEq, Fail)]
 pub enum CryptoError {
@@ -45,7 +80,7 @@ pub enum CryptoInstantiationError {
     HardwareUnsupported,
 }
 
-pub trait CryptoSystem {
+pub trait CryptoSystem: Send {
     fn hash(&self, message: &[u8]) -> Box<HashOutput>;
 
     fn hmac(&self, message: &[u8], key: &HMacKey) -> Box<HMacOutput>;
@@ -70,6 +105,8 @@ pub trait CryptoSystem {
         nonce: &AEADNonce,
         mac: &AEADMac,
     ) -> Result<(), CryptoError>;
+
+    fn aead_max_message_size(&self) -> usize;
 
     // Box and Sign/Verify use the same public/private key pairs.
     fn generate_keypair(&self) -> (Box<PublicKey>, Box<PrivateKey>);
@@ -177,8 +214,8 @@ pub trait CryptoSystem {
     }
 }
 
-pub fn instantiate_crypto_system() -> Result<Box<CryptoSystem>, CryptoInstantiationError> {
-    Ok(Box::new(LibSodiumCryptoSystem::new(
-        AEADAlgorithm::ChaCha20Poly1305Ietf,
-    )?))
+pub fn instantiate_crypto_system(
+    aead_algorithm: AEADAlgorithm,
+) -> Result<Box<CryptoSystem>, CryptoInstantiationError> {
+    Ok(Box::new(LibSodiumCryptoSystem::new(aead_algorithm)?))
 }

@@ -31,6 +31,7 @@ hex-literal = "0.2.*"
 
 [build-dependencies]
 prost-build = "0.5.*"
+failure = "0.1.*"
 
 [profile.release]
 lto = true

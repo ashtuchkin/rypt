@@ -1,110 +1,204 @@
 use std::convert::TryInto;
-use std::io::{Read, Write};
+use std::mem::size_of;
 
-use failure::Fallible;
+use failure::{bail, ensure, err_msg, Fallible, ResultExt};
 use prost::Message;
 
-use crate::errors::MyError;
+use crate::cli::Options;
+use crate::crypto::{
+    instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, CryptoSystem, HMacKey, KdfSalt,
+    PublicKey, AEAD_NONCE_LEN, KDF_SALT_LEN,
+};
+use crate::proto::rypt::{
+    file_header::CryptoFamily, libsodium_crypto_family::AeadAlgorithm, EncryptedHeader, FileHeader,
+    FormatVersion, LibsodiumCryptoFamily, Recipient, RecipientPayload, SenderAuthType,
+};
+use crate::stream_crypto::CryptoSystemAEADCodec;
+use crate::types::StreamConverter;
+use crate::util::serialize_proto;
 
-// Include generated FileHeader protobuf definition file.
-include!(concat!(env!("OUT_DIR"), "/rypt.rs"));
-pub use file_header::*;
+const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
+const ENCRYPTED_HEADER_NONCE: &AEADNonce = b"rypt header\0";
+const KDF_SALT_NONCE: &HMacKey = b"rypt kdf salt\0                  ";
+const SYMMETRIC_SECRET_NONCE: &HMacKey = b"rypt symmetric secret\0          ";
+const RECIPIENT_NONCE: &AEADNonce = b"ryptrecp\0\0\0\0"; // Zeros will be replaced with recip_idx
+const RECIP_IDX_POS: usize = AEAD_NONCE_LEN - size_of::<u32>(); // Put recipient index in the last 4 bytes.
+const COMPATIBILITY_VERSION: FormatVersion = FormatVersion::BasicEncryption;
 
-const MAX_HEADER_LEN: usize = 1_000_000;
-const FILE_SIGNATURE_LEN: usize = 4;
-const FILE_SIGNATURE: &[u8; FILE_SIGNATURE_LEN] = b"rypt";
-const FILE_ALIGNMENT: usize = 8;
-const PREHEADER_LEN: usize = FILE_SIGNATURE_LEN + std::mem::size_of::<u32>();
+/// Create CryptoFamily enum (protobuf) based on command line options.
+fn cryptofamily_from_opts(opts: &Options) -> Option<CryptoFamily> {
+    Some(CryptoFamily::Libsodium(LibsodiumCryptoFamily {
+        aead_algorithm: match opts.fast_aead_algorithm {
+            false => AeadAlgorithm::Chacha20poly1305.into(),
+            true => AeadAlgorithm::Aes256gcm.into(),
+        },
+    }))
+}
 
-// Returns the number of bytes we need to add to `len` to make it divisible by `alignment`.
-// Returned value will be in range 0..alignment-1.
-#[inline]
-fn padding_len(len: usize, alignment: usize) -> usize {
-    match len % alignment {
-        0 => 0,
-        remainder => alignment - remainder,
+/// Instantiate a CryptoSystem based on protobuf definition (CryptoFamily enum)
+fn cryptosys_from_proto(crypto_family: &Option<CryptoFamily>) -> Fallible<Box<CryptoSystem>> {
+    match crypto_family {
+        Some(CryptoFamily::Libsodium(LibsodiumCryptoFamily { aead_algorithm })) => {
+            let aead_algorithm = match AeadAlgorithm::from_i32(*aead_algorithm) {
+                Some(AeadAlgorithm::Chacha20poly1305) => AEADAlgorithm::ChaCha20Poly1305Ietf,
+                Some(AeadAlgorithm::Aes256gcm) => AEADAlgorithm::AES256GCM,
+                _ => bail!("Unknown aead algorithm"),
+            };
+            Ok(instantiate_crypto_system(aead_algorithm)?)
+        }
+        _ => bail!("Unknown crypto_family"),
     }
 }
 
-/*
-File structure:
-| Item                                             | Size         |
-|--------------------------------------------------|--------------|
-| File signature: ASCII 'rypt'                     | 4 bytes      |
-| Header length, little-endian uint32              | 4 bytes      |
-| Header protobuf                                  | header len   |
-| N x Ciphertext chunk, aligned to 8 bytes         | (chunk_size + asize); last one may be smaller |
-
-read_header reads everything until the first chunk; write_header writes it.
-*/
-
-pub fn read_header(reader: &mut Read) -> Fallible<(FileHeader, Vec<u8>)> {
-    // 1. Read constant-length pre-header with signature and header length.
-    let mut buffer = vec![0u8; PREHEADER_LEN];
-    reader.read_exact(&mut buffer)?;
-
-    // 1a. Check file signature
-    if &buffer[..FILE_SIGNATURE_LEN] != FILE_SIGNATURE {
-        return Err(MyError::InvalidHeader("Invalid signature".into()).into());
-    }
-
-    // 1b. Read header length and validate it.
-    let header_len = u32::from_le_bytes(buffer[FILE_SIGNATURE_LEN..].try_into().unwrap()) as usize;
-    if header_len == 0 {
-        return Err(MyError::InvalidHeader("Header length is zero".into()).into());
-    }
-    if header_len > MAX_HEADER_LEN {
-        return Err(MyError::InvalidHeader("Header is too large".into()).into());
-    }
-    let header_padding = padding_len(header_len, FILE_ALIGNMENT);
-
-    // 2. Read header with padding into memory.
-    buffer.resize(buffer.len() + header_len + header_padding, 0);
-    reader.read_exact(&mut buffer[PREHEADER_LEN..])?;
-
-    // 3. Decode and validate header.
-    let header = FileHeader::decode(&buffer[PREHEADER_LEN..PREHEADER_LEN + header_len])
-        .map_err(MyError::InvalidHeaderProto)?;
-    validate_header(&header)?;
-
-    // Note, we return everything we read so that we can authenticate it when encrypting.
-    Ok((header, buffer))
+fn recip_secret_key_from_password(
+    cryptosys: &CryptoSystem,
+    password: &str,
+    ephemeral_pk: &PublicKey,
+) -> Box<AEADKey> {
+    let mut salt: KdfSalt = Default::default();
+    salt.copy_from_slice(&cryptosys.hmac(&*ephemeral_pk, KDF_SALT_NONCE)[..KDF_SALT_LEN]);
+    cryptosys.key_derivation(&password, &salt)
 }
 
-pub fn write_header(writer: &mut Write, header: &FileHeader) -> Fallible<Vec<u8>> {
-    // 0. Make sure the header is valid.
-    validate_header(header)?;
-
-    // 1. Calculate header length
-    let header_len = header.encoded_len();
-    if header_len > MAX_HEADER_LEN {
-        return Err(MyError::EncodingError(header_len, MAX_HEADER_LEN).into());
-    }
-    let header_padding = padding_len(header_len, FILE_ALIGNMENT);
-
-    // 2. Serialize pre-header
-    let mut buffer = vec![0u8; PREHEADER_LEN];
-    buffer[..FILE_SIGNATURE_LEN].copy_from_slice(FILE_SIGNATURE);
-    buffer[FILE_SIGNATURE_LEN..].copy_from_slice(&(header_len as u32).to_le_bytes());
-
-    // 3. Serialize header
-    header.encode(&mut buffer)?; // This appends data to the buffer.
-    buffer.resize(buffer.len() + header_padding, 0);
-    assert_eq!(buffer.len(), PREHEADER_LEN + header_len + header_padding);
-
-    // 4. Write everything to the file.
-    writer.write_all(&buffer)?;
-    Ok(buffer)
+fn recip_secret_key_from_symmetric_key(
+    cryptosys: &CryptoSystem,
+    symmetric_key: &AEADKey,
+    ephemeral_pk: &PublicKey,
+) -> Box<AEADKey> {
+    let mut composed_key = ephemeral_pk.to_vec();
+    composed_key.extend(symmetric_key);
+    cryptosys.hmac(&composed_key, SYMMETRIC_SECRET_NONCE)
 }
 
-fn validate_header(header: &FileHeader) -> Fallible<()> {
-    if header.encryption_algorithm == None {
-        return Err(MyError::InvalidHeader("Encryption algorithm not set".into()).into());
+pub fn encrypt_header(opts: &Options) -> Fallible<(Vec<u8>, Box<StreamConverter>, usize)> {
+    let version = FormatVersion::BasicEncryption.into();
+
+    let crypto_family = cryptofamily_from_opts(&opts);
+    let cryptosys = cryptosys_from_proto(&crypto_family)?;
+
+    let chunk_size = DEFAULT_CHUNK_SIZE;
+    ensure!(
+        chunk_size <= cryptosys.aead_max_message_size(),
+        "Chunk size too large - not supported by the encryption algorithm"
+    );
+
+    let payload_key = cryptosys.aead_keygen();
+    let (ephemeral_pk, _ephemeral_sk) = cryptosys.generate_keypair();
+
+    // Encrypted header data
+    let sender_auth_type = SenderAuthType::Anonymous;
+    let sender_pk = PublicKey::default();
+    let encrypted_header = EncryptedHeader {
+        plaintext_chunk_size: chunk_size as u64,
+        sender_auth_type: sender_auth_type.into(),
+        sender_pk: sender_pk.to_vec(),
+    };
+
+    let encrypted_header_data = cryptosys.aead_encrypt_easy(
+        &serialize_proto(encrypted_header)?,
+        &payload_key,
+        ENCRYPTED_HEADER_NONCE,
+    );
+
+    // Recipients: only password or secret key for now.
+    let recipient_idx: u32 = 0;
+    let recipient_payload = RecipientPayload {
+        payload_key: payload_key.to_vec(),
+    };
+    let mut recipient_nonce: AEADNonce = *RECIPIENT_NONCE;
+    recipient_nonce[RECIP_IDX_POS..].copy_from_slice(&recipient_idx.to_le_bytes());
+
+    let recip_secret_key = if let Some(password) = &opts.password {
+        recip_secret_key_from_password(&*cryptosys, &password, &ephemeral_pk)
+    } else if let Some(secret_key) = &opts.secret_key {
+        recip_secret_key_from_symmetric_key(&*cryptosys, &secret_key, &ephemeral_pk)
+    } else {
+        unimplemented!();
+    };
+
+    let encrypted_payload = cryptosys.aead_encrypt_easy(
+        &serialize_proto(recipient_payload)?,
+        &recip_secret_key,
+        &recipient_nonce,
+    );
+
+    let recipients = vec![Recipient { encrypted_payload }];
+
+    let header = FileHeader {
+        version,
+        crypto_family,
+        ephemeral_pk: ephemeral_pk.to_vec(),
+        recipients,
+        encrypted_header_data,
+        associated_data: opts.associated_data.clone(),
+    };
+    let serialized_header = serialize_proto(header)?;
+    let header_hash = cryptosys.hash(&serialized_header);
+
+    let codec = CryptoSystemAEADCodec::new(cryptosys, *payload_key, *header_hash, true);
+
+    Ok((serialized_header, codec, chunk_size))
+}
+
+pub fn decrypt_header(
+    serialized_header: &[u8],
+    opts: &Options,
+) -> Fallible<(Box<StreamConverter>, usize)> {
+    let header: FileHeader = FileHeader::decode(serialized_header)
+        .with_context(|e| format!("Invalid header protobuf: {}", e))?;
+
+    ensure!(
+        header.version <= COMPATIBILITY_VERSION.into(),
+        "Can't decrypt this file - it's too new."
+    );
+
+    let cryptosys = cryptosys_from_proto(&header.crypto_family)?;
+    let ephemeral_pk: PublicKey = header.ephemeral_pk.as_slice().try_into()?;
+
+    let recip_secret_key = if let Some(password) = &opts.password {
+        recip_secret_key_from_password(&*cryptosys, &password, &ephemeral_pk)
+    } else if let Some(secret_key) = &opts.secret_key {
+        recip_secret_key_from_symmetric_key(&*cryptosys, &secret_key, &ephemeral_pk)
+    } else {
+        unimplemented!();
+    };
+
+    let mut payload_key: Option<AEADKey> = None;
+    for (recipient_idx, recipient) in header.recipients.iter().enumerate() {
+        // Try to decrypt all recipients.
+        let mut recipient_nonce: AEADNonce = *RECIPIENT_NONCE;
+        recipient_nonce[RECIP_IDX_POS..].copy_from_slice(&(recipient_idx as u32).to_le_bytes());
+
+        if let Ok(serialized_recipient) = cryptosys.aead_decrypt_easy(
+            &recipient.encrypted_payload,
+            &recip_secret_key,
+            &recipient_nonce,
+        ) {
+            let recip_payload: RecipientPayload = RecipientPayload::decode(serialized_recipient)
+                .with_context(|e| format!("Invalid recipient protobuf: {}", e))?;
+            payload_key = Some(recip_payload.payload_key.as_slice().try_into()?);
+            break;
+        }
     }
 
-    if header.chunk_size == 0 {
-        return Err(MyError::InvalidHeader("Chunk size must be non zero".into()).into());
-    }
+    let payload_key = payload_key.ok_or_else(|| err_msg("Invalid credentials"))?;
 
-    Ok(())
+    let encrypted_header_buf = cryptosys.aead_decrypt_easy(
+        &header.encrypted_header_data,
+        &payload_key,
+        ENCRYPTED_HEADER_NONCE,
+    )?;
+    let encrypted_header: EncryptedHeader = EncryptedHeader::decode(&encrypted_header_buf)
+        .with_context(|e| format!("Invalid encrypted header protobuf: {}", e))?;
+
+    let chunk_size = encrypted_header.plaintext_chunk_size as usize;
+    ensure!(
+        chunk_size <= cryptosys.aead_max_message_size(),
+        "Chunk size too large - not supported by the encryption algorithm"
+    );
+
+    let header_hash = cryptosys.hash(&serialized_header);
+    let codec = CryptoSystemAEADCodec::new(cryptosys, payload_key, *header_hash, false);
+
+    Ok((codec, chunk_size))
 }

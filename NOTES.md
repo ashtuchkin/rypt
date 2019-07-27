@@ -51,6 +51,10 @@ This is just internal thoughts, a lot of them stale.
     * Would need to decode public key and private key formats (potentially with password) https://stackoverflow.com/a/12750816/325300
       pub format: base64, then uint32-len-prefixed "ssh-ed25519" (0x0b size), then the key itself (0x20 size).
     * ssh-agent integration?
+
+## Public/private key encoding
+Looks like base58 (https://docs.rs/bs58) is the most widely used markdown-safe encoding. base62 from saltpack is okayish
+but requires writing custom codec.  
  
 
 ## Shamir secret sharing

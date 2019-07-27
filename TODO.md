@@ -1,7 +1,7 @@
 # P0
  * Read password from stdin
     * Twice for encrypt, once for decrypt
- * Add Argon as a key derivation function crypto_pwhash_argon2id
+ * Remove output file on error.
  * Support Public Key derivation:
     * Command line arguments providing receiver public key (required) and my private key (optional)
        * Plus, a command line mode to generate private/public key pair.
@@ -10,10 +10,6 @@
        * If using regular box construct, store sender's public key unless `--no-store-my-public-key` is given. 
     * Decryption:
        * Just my private key is required, unless we skipped storing sender public key.
- * Review our nonce extension algorithm vs crypto_core_hchacha20 https://libsodium.gitbook.io/doc/key_derivation#nonce-extension
- * Cleanup AES256 algorithm nonce stuff - it's too complicated and unsafe.
- * Add finalization to AES256GCM - otherwise attacker can truncate the file and get a correct output.
- * Adjust XChaCha20Poly1305 chunks to be 8-bytes aligned.
  * Finalize basic command line usage: '-e, --encrypt', '-d, decrypt' 
     * If encrypt/decrypt successful, replace file 
     *   copy attributes from the replaced file (owner, group, perms, access/mod times)
@@ -35,6 +31,7 @@
    * Keybase has its own payload format: saltpack https://saltpack.org/encryption-format-v2
  
 # P1
+ * Show whether AES256 is supported on this platform.
  * Add external authenticated data + ability to get it, with or without password.
  * Review how we keep secret keys in memory and clean it up (see sodium_mlock/sodium_munlock and sodium_memzero)
    * E.g. maybe use crypto_aead_aes256gcm_beforenm to create state from key and then forget it?

@@ -2,9 +2,8 @@ use std::io::{ErrorKind, Read, Write};
 use std::thread;
 
 use crossbeam_channel::{Receiver, SendError, Sender};
-use failure::Fallible;
+use failure::{bail, Fallible};
 
-use crate::errors::MyError;
 use crate::types::{Chunk, ChunkConfig, StreamConverter};
 
 const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in channels.
@@ -37,11 +36,9 @@ pub fn convert_stream(
     input_stream: Box<Read + Send>,
     output_stream: Box<Write + Send>,
     chunk_size: usize,
-    mut authentication_data: Option<Vec<u8>>,
     progress_cb: &mut FnMut(usize),
 ) -> Fallible<()> {
     let ChunkConfig {
-        input_chunk_offset,
         input_chunk_asize,
         output_chunk_asize,
     } = stream_converter.get_chunk_config();
@@ -64,18 +61,18 @@ pub fn convert_stream(
         .spawn(move || write_stream(output_stream, write_receiver, write_sender))?;
 
     // Create and send initial chunks to kickstart the pipeline.
-    let input_buffer_size = input_chunk_offset + chunk_size + input_chunk_asize;
-    let buffer_capacity =
-        input_chunk_offset + chunk_size + std::cmp::max(input_chunk_asize, output_chunk_asize) + 1; // +1 byte to allow reader to check Eof
+    let input_buffer_size = chunk_size + input_chunk_asize;
+    let buffer_capacity = chunk_size + std::cmp::max(input_chunk_asize, output_chunk_asize) + 1; // +1 byte to allow reader to check Eof
+    let mut chunk_idx = 0;
     for _ in 0..NUM_CHUNKS_IN_PIPELINE {
         let mut buffer = vec![0u8; buffer_capacity];
         buffer.truncate(input_buffer_size);
         let chunk = Chunk {
             buffer,
-            offset: input_chunk_offset,
             is_last_chunk: false,
-            authentication_data: authentication_data.take(), // Only provide auth data to the first chunk
+            chunk_idx,
         };
+        chunk_idx += 1;
         initial_sender.send(chunk).ok();
     }
 
@@ -83,13 +80,13 @@ pub fn convert_stream(
     let mut processed_bytes = 0usize;
     for mut chunk in final_receiver {
         // Calculate the size of the input Chunk that resulted in this output Chunk.
-        processed_bytes +=
-            chunk.buffer.len() - input_chunk_offset - output_chunk_asize + input_chunk_asize;
+        processed_bytes += chunk.buffer.len() - output_chunk_asize + input_chunk_asize;
 
         // Reset the chunk
-        chunk.offset = input_chunk_offset;
         chunk.buffer.resize(input_buffer_size, 0);
         assert_eq!(chunk.buffer.capacity(), buffer_capacity);
+        chunk.chunk_idx = chunk_idx;
+        chunk_idx += 1;
 
         // Send it back to the pipeline; ok to drop vectors if reading has stopped.
         initial_sender.send(chunk).ok();
@@ -132,7 +129,7 @@ pub fn convert_stream(
             // Handle thread panic. Theoretically we can extract the message via Any::downcast
             // (payload is usually a &str or String), but it will be written to stderr by default
             // panic handler anyway, so we don't bother.
-            Err(_) => return Err(MyError::WorkerThreadPanic(operation.to_string()).into()),
+            Err(_) => bail!("{} thread panic", operation.to_string()),
         }
     }
     Ok(())
@@ -147,7 +144,7 @@ fn read_stream(
     for mut chunk in input {
         chunk.buffer.push(0); // Add one byte to allow determining final chunk.
 
-        let mut read_ptr = chunk.offset;
+        let mut read_ptr = 0;
         if let Some(last_byte) = last_byte {
             chunk.buffer[read_ptr] = last_byte;
             read_ptr += 1;
@@ -205,7 +202,7 @@ fn write_stream(
     output: Sender<Chunk>,
 ) -> Fallible<()> {
     for chunk in input {
-        output_stream.write_all(&chunk.buffer[chunk.offset..])?;
+        output_stream.write_all(&chunk.buffer)?;
         if chunk.is_last_chunk {
             output_stream.flush()?;
         }

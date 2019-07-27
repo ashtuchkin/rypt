@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package rypt;
+
+// 'rypt' format file header. Note, the header itself is not encrypted (as its contents are needed for decryption),
+// but it is always authenticated via the AEAD encryption algorithm.
+message FileHeader {
+    // File Format version; every backwards-incompatible change will result in increment here.
+    // Decryptors must reject version above the one they support.
+    FormatVersion version = 1;
+
+    // Which crypto algorithms to use and corresponding config. Required.
+    oneof crypto_family {
+        LibsodiumCryptoFamily libsodium = 2;
+        // ids 3, 4, 5 are reserved for future algorithms.
+    }
+
+    // Public key for ephemeral keypair generated for this file.
+    bytes ephemeral_pk = 6;
+
+    // Ways to decrypt this file.
+    repeated Recipient recipients = 8;
+
+    // Encrypted 'EncryptedHeader' protobuf.
+    bytes encrypted_header_data = 9;
+
+    // User-supplied additional non-encrypted data that will be authenticated together with the rest of
+    // the file. Optional.
+    bytes associated_data = 11;
+
+    // Shamir Secret Sharing threshold - number of keys needed to decrypt this file.
+    //uint64 key_threshold = 7;
+
+    // Length in bytes of plaintext 'chunks' that we're encrypting and authenticating in order. The source file/stream
+    // has to be split into chunks to avoid having to read all the contents into memory. All chunks have the same
+    // length except the last one, which might be smaller.
+    // NOTE: Corresponding chunks in encrypted file are usually larger, to accommodate MAC codes. This additional size
+    // depends on the algorithm.
+    //uint64 chunk_size = 8;
+
+    // Parameters of a secret key derivation algorithm that was used when encrypting this file. Both password-
+    // hashing and public-key exchange are supported. Empty if the secret key was provided directly.
+//    oneof key_derivation {
+//        // Argon2Config argon2 = 9;
+//        SCryptConfig scrypt = 10;
+//        // X25519PublicKeyConfig x25519_public_key = 11;
+//    }
+}
+
+enum FormatVersion {
+    UNKNOWN_FORMAT = 0;
+    BASIC_ENCRYPTION = 1;
+    SIGNED_SENDER = 2;
+    REPUDIABLE_SENDER = 3;
+    SECRET_SHARING = 4;
+}
+
+message LibsodiumCryptoFamily {
+    enum AEADAlgorithm {
+        UNKNOWN_ALGORITHM = 0;
+        CHACHA20POLY1305 = 1;
+        AES256GCM = 2;
+        // Potentially HMAC for non-encrypted but signed files.
+    }
+    AEADAlgorithm aead_algorithm = 1;
+}
+
+message RecipientPayload {
+    bytes payload_key = 1;
+    //repeated bytes secret_shares = 2;
+    //fixed32 repudiable_auth_idx = 3;
+}
+
+message Recipient {
+    bytes encrypted_payload = 1;
+    //bytes recipient_id = 2;  // Optional
+}
+
+enum SenderAuthType {
+    UNKNOWN_SENDER_AUTH_TYPE = 0;
+    ANONYMOUS = 1;
+    //SIGNED = 2;
+    //REPUDIABLE = 3;
+}
+
+message EncryptedHeader {
+    fixed64 plaintext_chunk_size = 4;
+    SenderAuthType sender_auth_type = 1;
+    bytes sender_pk = 2;
+    //fixed32 repudiable_auth_count = 3;
+}
+
+
+
+
+//// NOTE: We use Scrypt algorithm as implemented by libsodium `crypto_pwhash_scryptsalsa208sha256()` function.
+//message SCryptConfig {
+//    bytes salt = 1;  // 32 bytes.
+//    uint64 opslimit = 2;
+//    uint64 memlimit = 3;
+//}
+//
+//message XChaCha20Poly1305Config {
+//}
+//
+//message AES256GCMConfig {
+//    bool extended_nonce = 1;
+//}

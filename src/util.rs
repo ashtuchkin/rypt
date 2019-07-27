@@ -1,4 +1,5 @@
 use failure::{bail, Fallible};
+use prost::Message;
 use std::time::Duration;
 
 static SCALES: &[&str; 7] = &["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
@@ -96,4 +97,11 @@ fn parse_hex_test() -> Fallible<()> {
     assert!(try_parse_hex_string("aq").is_err());
     assert!(try_parse_hex_string("3 132 33").is_err());
     Ok(())
+}
+
+#[inline]
+pub fn serialize_proto<T: Message>(message: T) -> Fallible<Vec<u8>> {
+    let mut buf = vec![];
+    message.encode(&mut buf)?;
+    Ok(buf)
 }

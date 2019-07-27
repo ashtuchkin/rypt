@@ -7,15 +7,15 @@ use libsodium_sys::{
     crypto_aead_aes256gcm_ABYTES, crypto_aead_aes256gcm_KEYBYTES, crypto_aead_aes256gcm_NPUBBYTES,
     crypto_aead_aes256gcm_decrypt_detached, crypto_aead_aes256gcm_encrypt_detached,
     crypto_aead_aes256gcm_is_available, crypto_aead_aes256gcm_keygen,
-    crypto_aead_chacha20poly1305_ietf_ABYTES, crypto_aead_chacha20poly1305_ietf_KEYBYTES,
-    crypto_aead_chacha20poly1305_ietf_NPUBBYTES,
+    crypto_aead_aes256gcm_messagebytes_max, crypto_aead_chacha20poly1305_ietf_ABYTES,
+    crypto_aead_chacha20poly1305_ietf_KEYBYTES, crypto_aead_chacha20poly1305_ietf_NPUBBYTES,
     crypto_aead_chacha20poly1305_ietf_decrypt_detached,
     crypto_aead_chacha20poly1305_ietf_encrypt_detached, crypto_aead_chacha20poly1305_ietf_keygen,
-    crypto_auth, crypto_auth_BYTES, crypto_auth_KEYBYTES, crypto_box_BEFORENMBYTES,
-    crypto_box_MACBYTES, crypto_box_NONCEBYTES, crypto_box_PUBLICKEYBYTES,
-    crypto_box_SECRETKEYBYTES, crypto_box_beforenm, crypto_box_detached_afternm,
-    crypto_box_open_detached_afternm, crypto_hash, crypto_hash_BYTES, crypto_pwhash,
-    crypto_pwhash_ALG_ARGON2ID13, crypto_pwhash_MEMLIMIT_INTERACTIVE,
+    crypto_aead_chacha20poly1305_ietf_messagebytes_max, crypto_auth, crypto_auth_BYTES,
+    crypto_auth_KEYBYTES, crypto_box_BEFORENMBYTES, crypto_box_MACBYTES, crypto_box_NONCEBYTES,
+    crypto_box_PUBLICKEYBYTES, crypto_box_SECRETKEYBYTES, crypto_box_beforenm,
+    crypto_box_detached_afternm, crypto_box_open_detached_afternm, crypto_hash, crypto_hash_BYTES,
+    crypto_pwhash, crypto_pwhash_ALG_ARGON2ID13, crypto_pwhash_MEMLIMIT_INTERACTIVE,
     crypto_pwhash_OPSLIMIT_INTERACTIVE, crypto_pwhash_SALTBYTES, crypto_sign_BYTES,
     crypto_sign_PUBLICKEYBYTES, crypto_sign_SECRETKEYBYTES, crypto_sign_detached,
     crypto_sign_ed25519_pk_to_curve25519, crypto_sign_ed25519_sk_to_curve25519,
@@ -219,6 +219,15 @@ impl CryptoSystem for LibSodiumCryptoSystem {
             return Err(CryptoError::InvalidCiphertext);
         }
         Ok(())
+    }
+
+    fn aead_max_message_size(&self) -> usize {
+        match self.aead_algorithm {
+            AEADAlgorithm::ChaCha20Poly1305Ietf => unsafe {
+                crypto_aead_chacha20poly1305_ietf_messagebytes_max()
+            },
+            AEADAlgorithm::AES256GCM => unsafe { crypto_aead_aes256gcm_messagebytes_max() },
+        }
     }
 
     // Encrypt/decrypt in-place, in `message` argument; fills out `mac`
@@ -440,6 +449,8 @@ mod tests {
     fn test_aead() -> Fallible<()> {
         for &algo in ALL_AEAD_ALGORITHMS {
             let cryptosys = LibSodiumCryptoSystem::new(algo)?;
+
+            assert!(cryptosys.aead_max_message_size() > 1024 * 1024 * 1024);
 
             let plaintext = "Secret payload".as_bytes();
             let additional_data = b"some data";
