@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use failure::{bail, ensure, Fallible};
 
-use crate::crypto::{AEADKey, AEAD_KEY_LEN};
+use crate::crypto::{AEADKey, PrivateKey, PublicKey, AEAD_KEY_LEN};
 use crate::runtime_env::RuntimeEnvironment;
 use crate::{util, PKG_NAME, PKG_VERSION};
 use std::convert::TryInto;
@@ -17,18 +17,37 @@ pub enum OperationMode {
     Decrypt,
 }
 
+#[derive(Debug)]
 pub struct InputOutputStream {
     pub input_path: PathBuf,
     pub output_path: PathBuf,
     pub remove_input_on_success: bool,
 }
 
+pub enum Credential {
+    Password(String),
+    SecretKey(AEADKey),
+    PublicKey(PublicKey),   // Only valid for encryption
+    PrivateKey(PrivateKey), // Only valid for decryption
+}
+
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            Credential::Password(_) => write!(f, "Password")?,
+            Credential::SecretKey(_) => write!(f, "SecretKey")?,
+            Credential::PublicKey(_) => write!(f, "PublicKey")?,
+            Credential::PrivateKey(_) => write!(f, "PrivateKey")?,
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct Options {
     pub mode: OperationMode,
     pub fast_aead_algorithm: bool,
-    pub password: Option<String>,
-    pub secret_key: Option<AEADKey>,
+    pub credentials: Vec<Credential>,
     pub associated_data: Vec<u8>,
     pub verbose: i32,
 }
@@ -163,23 +182,26 @@ Home page and documentation: <https://github.com/ashtuchkin/rypt>",
         })
         .collect();
 
+    let mut credentials: Vec<Credential> = vec![];
+
     let secret_key = matches.opt_str("secret-key-unsafe");
-    let secret_key = if let Some(s) = secret_key {
+    if let Some(s) = secret_key {
         let key_res: Result<AEADKey, _> = util::try_parse_hex_string(&s)?.as_slice().try_into();
         match key_res {
-            Ok(key) => Some(key),
+            Ok(key) => credentials.push(Credential::SecretKey(key)),
             Err(_) => bail!("Invalid secret key size, expected {} bytes", AEAD_KEY_LEN),
         }
-    } else {
-        None
     };
+
+    if let Some(password) = matches.opt_str("password-unsafe") {
+        credentials.push(Credential::Password(password));
+    }
 
     Ok((
         Some(Options {
             mode,
             fast_aead_algorithm: matches.opt_present("fast"),
-            password: matches.opt_str("password-unsafe"),
-            secret_key,
+            credentials,
             verbose: matches.opt_count("v") as i32,
             associated_data: vec![],
         }),

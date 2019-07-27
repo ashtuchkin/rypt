@@ -4,10 +4,10 @@ use std::mem::size_of;
 use failure::{bail, ensure, err_msg, Fallible, ResultExt};
 use prost::Message;
 
-use crate::cli::Options;
+use crate::cli::{Credential, Options};
 use crate::crypto::{
-    instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, CryptoSystem, HMacKey, KdfSalt,
-    PublicKey, AEAD_NONCE_LEN, KDF_SALT_LEN,
+    instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, BoxNonce, CryptoSystem, HMacKey,
+    KdfSalt, PrivateKey, PublicKey, AEAD_NONCE_LEN, BOX_NONCE_LEN, KDF_SALT_LEN,
 };
 use crate::proto::rypt::{
     file_header::CryptoFamily, libsodium_crypto_family::AeadAlgorithm, EncryptedHeader, FileHeader,
@@ -23,6 +23,8 @@ const KDF_SALT_NONCE: &HMacKey = b"rypt kdf salt\0                  ";
 const SYMMETRIC_SECRET_NONCE: &HMacKey = b"rypt symmetric secret\0          ";
 const RECIPIENT_NONCE: &AEADNonce = b"ryptrecp\0\0\0\0"; // Zeros will be replaced with recip_idx
 const RECIP_IDX_POS: usize = AEAD_NONCE_LEN - size_of::<u32>(); // Put recipient index in the last 4 bytes.
+const RECIPIENT_BOX_NONCE: &BoxNonce = b"rypt recipient      \0\0\0\0"; // Zeros will be replaced with recip_idx
+const RECIP_BOX_IDX_POS: usize = BOX_NONCE_LEN - size_of::<u32>(); // Put recipient index in the last 4 bytes.
 const COMPATIBILITY_VERSION: FormatVersion = FormatVersion::BasicEncryption;
 
 /// Create CryptoFamily enum (protobuf) based on command line options.
@@ -50,24 +52,65 @@ fn cryptosys_from_proto(crypto_family: &Option<CryptoFamily>) -> Fallible<Box<Cr
     }
 }
 
-fn recip_secret_key_from_password(
+fn recipient_secret_key(
     cryptosys: &CryptoSystem,
-    password: &str,
     ephemeral_pk: &PublicKey,
+    credential: &Credential,
 ) -> Box<AEADKey> {
-    let mut salt: KdfSalt = Default::default();
-    salt.copy_from_slice(&cryptosys.hmac(&*ephemeral_pk, KDF_SALT_NONCE)[..KDF_SALT_LEN]);
-    cryptosys.key_derivation(&password, &salt)
+    match credential {
+        Credential::Password(password) => {
+            let mut salt: KdfSalt = Default::default();
+            salt.copy_from_slice(&cryptosys.hmac(&*ephemeral_pk, KDF_SALT_NONCE)[..KDF_SALT_LEN]);
+            cryptosys.key_derivation(&password, &salt)
+        }
+        Credential::SecretKey(secret_key) => {
+            let mut composed_key = ephemeral_pk.to_vec();
+            composed_key.extend(secret_key);
+            cryptosys.hmac(&composed_key, SYMMETRIC_SECRET_NONCE)
+        }
+        _ => panic!("Unexpected credential type"),
+    }
 }
 
-fn recip_secret_key_from_symmetric_key(
+fn recipient_secret_nonce(recipient_idx: usize) -> Box<AEADNonce> {
+    let mut nonce = Box::new(*RECIPIENT_NONCE);
+    nonce[RECIP_IDX_POS..].copy_from_slice(&(recipient_idx as u32).to_le_bytes());
+    nonce
+}
+
+fn recipient_box_nonce(recipient_idx: usize) -> Box<BoxNonce> {
+    let mut nonce = Box::new(*RECIPIENT_BOX_NONCE);
+    nonce[RECIP_BOX_IDX_POS..].copy_from_slice(&(recipient_idx as u32).to_le_bytes());
+    nonce
+}
+
+fn encrypt_payload_for_recipient(
     cryptosys: &CryptoSystem,
-    symmetric_key: &AEADKey,
     ephemeral_pk: &PublicKey,
-) -> Box<AEADKey> {
-    let mut composed_key = ephemeral_pk.to_vec();
-    composed_key.extend(symmetric_key);
-    cryptosys.hmac(&composed_key, SYMMETRIC_SECRET_NONCE)
+    ephemeral_sk: &PrivateKey,
+    recipient_payload: &RecipientPayload,
+    recipient_idx: usize,
+    credential: &Credential,
+) -> Recipient {
+    let recipient_payload = serialize_proto(recipient_payload).unwrap();
+    let encrypted_payload = match credential {
+        Credential::Password(_) | Credential::SecretKey(_) => {
+            let secret_key = recipient_secret_key(&*cryptosys, &ephemeral_pk, credential);
+            let nonce = recipient_secret_nonce(recipient_idx);
+
+            cryptosys.aead_encrypt_easy(&recipient_payload, &secret_key, &nonce)
+        }
+        Credential::PublicKey(public_key) => {
+            let nonce = recipient_box_nonce(recipient_idx);
+            cryptosys
+                .box_encrypt_easy(&recipient_payload, public_key, ephemeral_sk, &nonce)
+                .unwrap() // public key might be malformed; panic for now.
+        }
+        Credential::PrivateKey(_) => {
+            panic!("Unexpected private key when encoding");
+        }
+    };
+    Recipient { encrypted_payload }
 }
 
 pub fn encrypt_header(opts: &Options) -> Fallible<(Vec<u8>, Box<StreamConverter>, usize)> {
@@ -83,7 +126,7 @@ pub fn encrypt_header(opts: &Options) -> Fallible<(Vec<u8>, Box<StreamConverter>
     );
 
     let payload_key = cryptosys.aead_keygen();
-    let (ephemeral_pk, _ephemeral_sk) = cryptosys.generate_keypair();
+    let (ephemeral_pk, ephemeral_sk) = cryptosys.generate_keypair();
 
     // Encrypted header data
     let sender_auth_type = SenderAuthType::Anonymous;
@@ -95,35 +138,32 @@ pub fn encrypt_header(opts: &Options) -> Fallible<(Vec<u8>, Box<StreamConverter>
     };
 
     let encrypted_header_data = cryptosys.aead_encrypt_easy(
-        &serialize_proto(encrypted_header)?,
+        &serialize_proto(&encrypted_header)?,
         &payload_key,
         ENCRYPTED_HEADER_NONCE,
     );
 
-    // Recipients: only password or secret key for now.
-    let recipient_idx: u32 = 0;
+    // Recipients
     let recipient_payload = RecipientPayload {
         payload_key: payload_key.to_vec(),
     };
-    let mut recipient_nonce: AEADNonce = *RECIPIENT_NONCE;
-    recipient_nonce[RECIP_IDX_POS..].copy_from_slice(&recipient_idx.to_le_bytes());
+    let recipients = opts
+        .credentials
+        .iter()
+        .enumerate()
+        .map(|(recipient_idx, credential)| {
+            encrypt_payload_for_recipient(
+                &*cryptosys,
+                &ephemeral_pk,
+                &ephemeral_sk,
+                &recipient_payload,
+                recipient_idx,
+                &credential,
+            )
+        })
+        .collect::<Vec<_>>();
 
-    let recip_secret_key = if let Some(password) = &opts.password {
-        recip_secret_key_from_password(&*cryptosys, &password, &ephemeral_pk)
-    } else if let Some(secret_key) = &opts.secret_key {
-        recip_secret_key_from_symmetric_key(&*cryptosys, &secret_key, &ephemeral_pk)
-    } else {
-        unimplemented!();
-    };
-
-    let encrypted_payload = cryptosys.aead_encrypt_easy(
-        &serialize_proto(recipient_payload)?,
-        &recip_secret_key,
-        &recipient_nonce,
-    );
-
-    let recipients = vec![Recipient { encrypted_payload }];
-
+    // Gather all the data and create FileHeader
     let header = FileHeader {
         version,
         crypto_family,
@@ -132,12 +172,54 @@ pub fn encrypt_header(opts: &Options) -> Fallible<(Vec<u8>, Box<StreamConverter>
         encrypted_header_data,
         associated_data: opts.associated_data.clone(),
     };
-    let serialized_header = serialize_proto(header)?;
+    let serialized_header = serialize_proto(&header)?;
     let header_hash = cryptosys.hash(&serialized_header);
 
-    let codec = CryptoSystemAEADCodec::new(cryptosys, *payload_key, *header_hash, true);
+    let codec = CryptoSystemAEADCodec::new(cryptosys, &payload_key, &header_hash, true);
 
     Ok((serialized_header, codec, chunk_size))
+}
+
+fn decrypt_payload_for_recipient(
+    cryptosys: &CryptoSystem,
+    ephemeral_pk: &PublicKey,
+    encrypted_recipients: &[Recipient],
+    credential: &Credential,
+) -> Option<RecipientPayload> {
+    // Compute secret key for each credential only once, as it can be slow to derive it from password.
+    let secret_key = match credential {
+        Credential::Password(_) | Credential::SecretKey(_) => {
+            recipient_secret_key(&*cryptosys, &ephemeral_pk, credential)
+        }
+        _ => Box::new(AEADKey::default()),
+    };
+
+    encrypted_recipients
+        .into_iter()
+        .enumerate()
+        .find_map(|(recipient_idx, recipient)| match credential {
+            Credential::Password(_) | Credential::SecretKey(_) => {
+                let nonce = recipient_secret_nonce(recipient_idx);
+                cryptosys
+                    .aead_decrypt_easy(&recipient.encrypted_payload, &secret_key, &nonce)
+                    .ok()
+            }
+            Credential::PublicKey(_) => {
+                panic!("Unexpected public key when decoding");
+            }
+            Credential::PrivateKey(private_key) => {
+                let nonce = recipient_box_nonce(recipient_idx);
+                cryptosys
+                    .box_decrypt_easy(
+                        &recipient.encrypted_payload,
+                        ephemeral_pk,
+                        private_key,
+                        &nonce,
+                    )
+                    .ok()
+            }
+        })
+        .and_then(|buf| RecipientPayload::decode(buf).ok())
 }
 
 pub fn decrypt_header(
@@ -155,33 +237,23 @@ pub fn decrypt_header(
     let cryptosys = cryptosys_from_proto(&header.crypto_family)?;
     let ephemeral_pk: PublicKey = header.ephemeral_pk.as_slice().try_into()?;
 
-    let recip_secret_key = if let Some(password) = &opts.password {
-        recip_secret_key_from_password(&*cryptosys, &password, &ephemeral_pk)
-    } else if let Some(secret_key) = &opts.secret_key {
-        recip_secret_key_from_symmetric_key(&*cryptosys, &secret_key, &ephemeral_pk)
-    } else {
-        unimplemented!();
-    };
+    let recipient_payloads = opts
+        .credentials
+        .iter()
+        .filter_map(|credential| {
+            decrypt_payload_for_recipient(
+                &*cryptosys,
+                &ephemeral_pk,
+                &header.recipients,
+                credential,
+            )
+        })
+        .collect::<Vec<_>>();
 
-    let mut payload_key: Option<AEADKey> = None;
-    for (recipient_idx, recipient) in header.recipients.iter().enumerate() {
-        // Try to decrypt all recipients.
-        let mut recipient_nonce: AEADNonce = *RECIPIENT_NONCE;
-        recipient_nonce[RECIP_IDX_POS..].copy_from_slice(&(recipient_idx as u32).to_le_bytes());
-
-        if let Ok(serialized_recipient) = cryptosys.aead_decrypt_easy(
-            &recipient.encrypted_payload,
-            &recip_secret_key,
-            &recipient_nonce,
-        ) {
-            let recip_payload: RecipientPayload = RecipientPayload::decode(serialized_recipient)
-                .with_context(|e| format!("Invalid recipient protobuf: {}", e))?;
-            payload_key = Some(recip_payload.payload_key.as_slice().try_into()?);
-            break;
-        }
-    }
-
-    let payload_key = payload_key.ok_or_else(|| err_msg("Invalid credentials"))?;
+    let recipient_payload = recipient_payloads
+        .first()
+        .ok_or_else(|| err_msg("Invalid credentials"))?;
+    let payload_key: AEADKey = recipient_payload.payload_key.as_slice().try_into()?;
 
     let encrypted_header_buf = cryptosys.aead_decrypt_easy(
         &header.encrypted_header_data,
@@ -198,7 +270,7 @@ pub fn decrypt_header(
     );
 
     let header_hash = cryptosys.hash(&serialized_header);
-    let codec = CryptoSystemAEADCodec::new(cryptosys, payload_key, *header_hash, false);
+    let codec = CryptoSystemAEADCodec::new(cryptosys, &payload_key, &header_hash, false);
 
     Ok((codec, chunk_size))
 }

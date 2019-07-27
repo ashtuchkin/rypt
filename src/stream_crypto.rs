@@ -21,14 +21,14 @@ pub struct CryptoSystemAEADCodec {
 impl CryptoSystemAEADCodec {
     pub fn new(
         cryptosys: Box<CryptoSystem>,
-        payload_key: AEADKey,
-        header_hash: HashOutput,
+        payload_key: &AEADKey,
+        header_hash: &HashOutput,
         is_encrypting: bool,
     ) -> Box<StreamConverter + Send> {
         Box::new(CryptoSystemAEADCodec {
             cryptosys,
-            payload_key,
-            header_hash,
+            payload_key: *payload_key,
+            header_hash: *header_hash,
             is_encrypting,
         })
     }

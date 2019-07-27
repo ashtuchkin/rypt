@@ -100,7 +100,7 @@ fn parse_hex_test() -> Fallible<()> {
 }
 
 #[inline]
-pub fn serialize_proto<T: Message>(message: T) -> Fallible<Vec<u8>> {
+pub fn serialize_proto<T: Message>(message: &T) -> Fallible<Vec<u8>> {
     let mut buf = vec![];
     message.encode(&mut buf)?;
     Ok(buf)
