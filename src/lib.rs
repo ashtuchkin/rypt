@@ -72,7 +72,6 @@ fn convert_streams(
     create_converter: impl Fn(&mut Read, &mut Write) -> Fallible<(Box<StreamConverter>, usize)>,
 ) -> Fallible<()> {
     let total_files = io_streams.len();
-    assert!(total_files > 0);
     for (file_idx, io_stream_res) in io_streams.into_iter().enumerate() {
         io_stream_res
             .and_then(|io_stream| {

@@ -19,15 +19,15 @@ const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in c
 ///
 /// The pipeline looks like this:
 ///
-///                   -----------------                -----------------------
-///                   |  Main thread  |  <- Chunks --  |    Writer thread    |  -> Output stream
-///                   -----------------                -----------------------
-///                          |                                    ^
-///                        Chunks                              Chunks
-///                          V                                    |
-///                   -----------------                -----------------------
-/// Input stream  ->  | Reader thread |  -- Chunks ->  | In-place conversion |
-///                   -----------------                -----------------------
+/// |                   -----------------                -----------------------
+/// |                   |  Main thread  |  <- Chunks --  |    Writer thread    |  -> Output stream
+/// |                   -----------------                -----------------------
+/// |                          |                                    ^
+/// |                        Chunks                              Chunks
+/// |                          V                                    |
+/// |                   -----------------                -----------------------
+/// | Input stream  ->  | Reader thread |  -- Chunks ->  | In-place conversion |
+/// |                  -----------------                -----------------------
 ///
 /// Main thread here only supplies initial Chunks to the pipeline, then redirects used Chunks back
 /// to the start of the pipeline. It also calls the progress callback to notify the caller.

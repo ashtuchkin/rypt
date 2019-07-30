@@ -60,10 +60,10 @@ impl LibSodiumCryptoSystem {
             return Err(CryptoInstantiationError::InitializationError);
         }
 
-        if aead_algorithm == AEADAlgorithm::AES256GCM {
-            if unsafe { crypto_aead_aes256gcm_is_available() } == 0 {
-                return Err(CryptoInstantiationError::HardwareUnsupported);
-            }
+        if aead_algorithm == AEADAlgorithm::AES256GCM
+            && unsafe { crypto_aead_aes256gcm_is_available() } == 0
+        {
+            return Err(CryptoInstantiationError::HardwareUnsupported);
         }
 
         Ok(LibSodiumCryptoSystem { aead_algorithm })
@@ -347,7 +347,7 @@ impl CryptoSystem for LibSodiumCryptoSystem {
                 password.as_ptr() as *const i8,
                 password.len() as u64,
                 salt.as_ptr(),
-                crypto_pwhash_OPSLIMIT_INTERACTIVE as u64,
+                u64::from(crypto_pwhash_OPSLIMIT_INTERACTIVE),
                 crypto_pwhash_MEMLIMIT_INTERACTIVE as usize,
                 crypto_pwhash_ALG_ARGON2ID13 as i32,
             )
@@ -452,7 +452,7 @@ mod tests {
 
             assert!(cryptosys.aead_max_message_size() > 1024 * 1024 * 1024);
 
-            let plaintext = "Secret payload".as_bytes();
+            let plaintext = b"Secret payload";
             let additional_data = b"some data";
 
             let secret_key = &*cryptosys.aead_keygen();
@@ -465,7 +465,7 @@ mod tests {
             let mut message = vec![0u8; plaintext.len()];
 
             // Encrypt..
-            message.copy_from_slice(&plaintext);
+            message.copy_from_slice(plaintext);
             cryptosys.aead_encrypt(&mut message, additional_data, &secret_key, &nonce, &mut mac);
 
             // .. message must be encoded in-place and mac must be filled.
@@ -501,7 +501,7 @@ mod tests {
 
             // Check decryption fails when Mac is invalid
             message.copy_from_slice(&ciphertext);
-            let mut different_mac = mac.clone();
+            let mut different_mac = mac;
             different_mac[0] ^= 1;
             let res = cryptosys.aead_decrypt(
                 &mut message,
@@ -533,7 +533,7 @@ mod tests {
         for &algo in ALL_AEAD_ALGORITHMS {
             let cryptosys = LibSodiumCryptoSystem::new(algo)?;
 
-            let plaintext = "Secret payload".as_bytes();
+            let plaintext = b"Secret payload";
             let secret_key = &*cryptosys.aead_keygen();
             let nonce = b"rypt\0\0\0\0\0\0\0\0";
 
@@ -559,7 +559,7 @@ mod tests {
         let (alice_pk, alice_sk) = cryptosys.generate_keypair();
         let (bob_pk, bob_sk) = cryptosys.generate_keypair();
 
-        let plaintext = "Secret payload".as_bytes();
+        let plaintext = b"Secret payload";
         let nonce = b"rypt\0\0\0\0\0\0\0\0rypt\0\0\0\0\0\0\0\0";
         let mut mac = BoxMac::default();
         let mut message = vec![0u8; plaintext.len()];
@@ -588,13 +588,13 @@ mod tests {
         assert_eq!(res, Err(CryptoError::InvalidCiphertext));
 
         message.copy_from_slice(&ciphertext);
-        let mut different_nonce = nonce.clone();
+        let mut different_nonce = *nonce;
         different_nonce[0] ^= 1;
         let res = cryptosys.box_decrypt(&mut message, &alice_pk, &bob_sk, &different_nonce, &mac);
         assert_eq!(res, Err(CryptoError::InvalidCiphertext));
 
         message.copy_from_slice(&ciphertext);
-        let mut different_mac = mac.clone();
+        let mut different_mac = mac;
         different_mac[0] ^= 1;
         let res = cryptosys.box_decrypt(&mut message, &alice_pk, &bob_sk, &nonce, &different_mac);
         assert_eq!(res, Err(CryptoError::InvalidCiphertext));
@@ -609,7 +609,7 @@ mod tests {
         let (alice_pk, alice_sk) = cryptosys.generate_keypair();
         let (bob_pk, bob_sk) = cryptosys.generate_keypair();
 
-        let plaintext = "Secret payload".as_bytes();
+        let plaintext = b"Secret payload";
         let nonce = b"rypt\0\0\0\0\0\0\0\0rypt\0\0\0\0\0\0\0\0";
 
         // Alice sends to Bob and Bob decrypts it.
@@ -632,7 +632,7 @@ mod tests {
 
         let (alice_pk, alice_sk) = cryptosys.generate_keypair();
 
-        let plaintext = "Secret payload".as_bytes();
+        let plaintext = b"Secret payload";
 
         let mut signature = [0u8; SIGNATURE_LEN];
         cryptosys.sign(plaintext, &alice_sk, &mut signature);

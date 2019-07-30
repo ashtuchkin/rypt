@@ -30,9 +30,10 @@ const COMPATIBILITY_VERSION: FormatVersion = FormatVersion::BasicEncryption;
 /// Create CryptoFamily enum (protobuf) based on command line options.
 fn cryptofamily_from_opts(opts: &EncryptOptions) -> Option<CryptoFamily> {
     Some(CryptoFamily::Libsodium(LibsodiumCryptoFamily {
-        aead_algorithm: match opts.fast_aead_algorithm {
-            false => AeadAlgorithm::Chacha20poly1305.into(),
-            true => AeadAlgorithm::Aes256gcm.into(),
+        aead_algorithm: if opts.fast_aead_algorithm {
+            AeadAlgorithm::Aes256gcm.into()
+        } else {
+            AeadAlgorithm::Chacha20poly1305.into()
         },
     }))
 }
@@ -175,7 +176,12 @@ pub fn encrypt_header(opts: &EncryptOptions) -> Fallible<(Vec<u8>, Box<StreamCon
     let serialized_header = serialize_proto(&header)?;
     let header_hash = cryptosys.hash(&serialized_header);
 
-    let codec = CryptoSystemAEADCodec::new(cryptosys, &payload_key, &header_hash, true);
+    let codec = Box::new(CryptoSystemAEADCodec::new(
+        cryptosys,
+        &payload_key,
+        &header_hash,
+        true,
+    ));
 
     Ok((serialized_header, codec, chunk_size))
 }
@@ -195,7 +201,7 @@ fn decrypt_payload_for_recipient(
     };
 
     encrypted_recipients
-        .into_iter()
+        .iter()
         .enumerate()
         .find_map(|(recipient_idx, recipient)| match credential {
             Credential::Password(_) | Credential::SymmetricKey(_) => {
@@ -270,7 +276,12 @@ pub fn decrypt_header(
     );
 
     let header_hash = cryptosys.hash(&serialized_header);
-    let codec = CryptoSystemAEADCodec::new(cryptosys, &payload_key, &header_hash, false);
+    let codec = Box::new(CryptoSystemAEADCodec::new(
+        cryptosys,
+        &payload_key,
+        &header_hash,
+        false,
+    ));
 
     Ok((codec, chunk_size))
 }

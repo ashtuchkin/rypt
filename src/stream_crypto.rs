@@ -24,13 +24,13 @@ impl CryptoSystemAEADCodec {
         payload_key: &AEADKey,
         header_hash: &HashOutput,
         is_encrypting: bool,
-    ) -> Box<StreamConverter + Send> {
-        Box::new(CryptoSystemAEADCodec {
+    ) -> Self {
+        CryptoSystemAEADCodec {
             cryptosys,
             payload_key: *payload_key,
             header_hash: *header_hash,
             is_encrypting,
-        })
+        }
     }
 }
 

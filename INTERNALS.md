@@ -32,14 +32,11 @@ Header protobuf contents:
  * Which AEAD algorithm to use for the payload. If we'd want just to sign in the future, this can be NULL.
  * EphemeralPK
  * KeyThreshold
- * Recipients array. For each recipient:
+ * Recipients array. All public key recipients are listed first. For each recipient:
    * Recipient identification: Optional(RecipientPK)
    * Encrypted payload key.
       Nonce = PAD(16, "rypt recipient") | RecipientIdx
-      PayloadProto:
-       AuthIdx: fixed32 - AuthIdx[RecipientIdx] or 0
-       PayloadKey: bytes
-       repeated ShamirSecretShare: bytes
+      Payload: PayloadKey or ShamirSecretShare
       If symmetric:
         SecretKey = HMAC(EphemeralPK|SymmetricSecret, K=PAD(32, "rypt symmetric secret"))
         SECRETBOX(M=Payload, K=SecretKey, N=Nonce)

@@ -19,12 +19,11 @@ pub struct InputOutputStream {
     pub remove_input_on_success: bool,
 }
 
-#[derive(Clone)]
 pub enum Credential {
     Password(String),
     SymmetricKey(AEADKey),
-    PublicKey(PublicKey),
-    PrivateKey(PrivateKey),
+    PublicKey(PublicKey),   // Only for encryption
+    PrivateKey(PrivateKey), // Only for decryption
 }
 
 impl std::fmt::Debug for Credential {
@@ -129,8 +128,8 @@ const MODES: &[(&str, OperationMode); 4] = &[
     ("V", OperationMode::Version),
 ];
 
-fn get_mode(matches: &Matches, is_empty: bool) -> OperationMode {
-    if is_empty {
+fn get_mode(matches: &Matches, no_args_provided: bool) -> OperationMode {
+    if no_args_provided {
         return OperationMode::Help;
     }
 
@@ -145,7 +144,7 @@ fn get_mode(matches: &Matches, is_empty: bool) -> OperationMode {
         .max_by_key(|(pos, _)| *pos)
         .map(|(_, val)| val);
 
-    // If no mode is given, calculate the default.
+    // Encrypt is the default mode
     last_mode.unwrap_or(OperationMode::Encrypt)
 }
 
@@ -196,7 +195,7 @@ fn get_input_output_streams(
     if input_paths.is_empty() {
         input_paths.push(PathBuf::from("-"));
     }
-    let streams = input_paths
+    input_paths
         .into_iter()
         .map(|input_path| {
             let (output_path, remove_input_on_success) = if is_encrypt {
@@ -210,8 +209,7 @@ fn get_input_output_streams(
                 remove_input_on_success,
             })
         })
-        .collect();
-    streams
+        .collect()
 }
 
 pub fn parse_command_line(env: &RuntimeEnvironment) -> Fallible<Command> {
