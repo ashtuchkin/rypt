@@ -44,7 +44,7 @@ impl StreamConverter for CryptoSystemAEADCodec {
 
     fn convert_chunk(&mut self, mut chunk: Chunk) -> Fallible<Chunk> {
         let mut authed_data = [0u8; HASH_OUTPUT_LEN + 1];
-        authed_data[..HASH_OUTPUT_LEN].copy_from_slice(&self.header_hash);
+        authed_data[..HASH_OUTPUT_LEN].copy_from_slice(&self.header_hash.into());
         authed_data[HASH_OUTPUT_LEN] = chunk.is_last_chunk as u8;
 
         let mut nonce: AEADNonce = *CHUNK_NONCE;

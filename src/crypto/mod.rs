@@ -20,8 +20,67 @@ mod libsodium;
 /// The usual concerns about short nonce lengths are taken into account at the callsites - the
 /// nonces are deterministic and use counters with different prefixes to ensure uniqueness.
 
-pub const HASH_OUTPUT_LEN: usize = 32;
-pub type HashOutput = [u8; HASH_OUTPUT_LEN];
+macro_rules! define_named_bytes {
+    ($type: ident, $len_name: ident, $len: expr) => {
+        pub const $len_name: usize = $len;
+
+        #[derive(Copy, Clone, PartialEq)]
+        pub struct $type([u8; $len_name]);
+
+        impl std::convert::From<[u8; $len_name]> for $type {
+            #[inline]
+            fn from(value: [u8; $len_name]) -> Self {
+                $type { 0: value }
+            }
+        }
+
+        impl std::convert::From<$type> for [u8; $len_name] {
+            #[inline]
+            fn from(val: $type) -> Self {
+                val.0
+            }
+        }
+
+        impl std::convert::TryFrom<&[u8]> for $type {
+            type Error = std::array::TryFromSliceError;
+
+            fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+                Ok($type {
+                    0: value.try_into()?,
+                })
+            }
+        }
+
+        impl $type {
+            pub unsafe fn zero() -> $type {
+                $type {
+                    0: std::mem::zeroed(),
+                }
+            }
+
+            #[inline]
+            pub fn to_vec(&self) -> Vec<u8> {
+                self.0.to_vec()
+            }
+
+            //            pub fn copy_from_slice(&mut self, slice: &[u8]) {
+            //                self.0.copy_from_slice(slice)
+            //            }
+
+            #[inline]
+            pub unsafe fn as_ptr(&self) -> *const u8 {
+                self.0.as_ptr()
+            }
+
+            #[inline]
+            pub unsafe fn as_mut_ptr(&mut self) -> *mut u8 {
+                self.0.as_mut_ptr()
+            }
+        }
+    };
+}
+
+define_named_bytes!(HashOutput, HASH_OUTPUT_LEN, 32);
 
 pub const HMAC_OUTPUT_LEN: usize = 32;
 pub type HMacOutput = [u8; HMAC_OUTPUT_LEN];
@@ -29,8 +88,7 @@ pub type HMacOutput = [u8; HMAC_OUTPUT_LEN];
 pub const HMAC_KEY_LEN: usize = 32;
 pub type HMacKey = [u8; HMAC_KEY_LEN];
 
-pub const AEAD_KEY_LEN: usize = 32;
-pub type AEADKey = [u8; AEAD_KEY_LEN];
+define_named_bytes!(AEADKey, AEAD_KEY_LEN, 32);
 
 pub const AEAD_NONCE_LEN: usize = 12;
 pub type AEADNonce = [u8; AEAD_NONCE_LEN];

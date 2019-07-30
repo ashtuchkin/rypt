@@ -1,7 +1,7 @@
 use crate::crypto::{
     AEADKey, AEADMac, AEADNonce, BoxMac, BoxNonce, CryptoError, CryptoInstantiationError,
     CryptoSystem, HMacKey, HMacOutput, HashOutput, KdfOutput, KdfSalt, PrivateKey, PublicKey,
-    Signature,
+    Signature, HASH_OUTPUT_LEN,
 };
 use libsodium_sys::{
     crypto_aead_aes256gcm_ABYTES, crypto_aead_aes256gcm_KEYBYTES, crypto_aead_aes256gcm_NPUBBYTES,
@@ -72,18 +72,16 @@ impl LibSodiumCryptoSystem {
 
 impl CryptoSystem for LibSodiumCryptoSystem {
     fn hash(&self, message: &[u8]) -> Box<HashOutput> {
-        let mut hash = [0u8; crypto_hash_BYTES as usize];
-
         unsafe {
+            let mut hash = [0u8; crypto_hash_BYTES as usize];
             crypto_hash(hash.as_mut_ptr(), message.as_ptr(), message.len() as u64);
-        }
 
-        // Return the first 32 bytes of the 64 byte SHA512 hash.
-        let mut result: Box<HashOutput> = Default::default();
-        let result_len = result.len();
-        result.copy_from_slice(&hash[..result_len]);
-        wipe_buf(&mut hash);
-        result
+            // Return the first 32 bytes of the 64 byte SHA512 hash.
+            let mut result = Box::new(HashOutput::zero());
+            result.copy_from_slice(&hash[..HASH_OUTPUT_LEN]);
+            wipe_buf(&mut hash);
+            result
+        }
     }
 
     fn hmac(&self, message: &[u8], key: &HMacKey) -> Box<HMacOutput> {
@@ -102,21 +100,23 @@ impl CryptoSystem for LibSodiumCryptoSystem {
     }
 
     fn aead_keygen(&self) -> Box<AEADKey> {
-        match self.aead_algorithm {
-            AEADAlgorithm::ChaCha20Poly1305Ietf => {
-                let mut res = Box::new([0u8; crypto_aead_chacha20poly1305_ietf_KEYBYTES as usize]);
-                unsafe {
+        assert_eq_size!(
+            AEADKey,
+            [u8; crypto_aead_chacha20poly1305_ietf_KEYBYTES as usize]
+        );
+        assert_eq_size!(AEADKey, [u8; crypto_aead_aes256gcm_KEYBYTES as usize]);
+
+        unsafe {
+            let mut res = Box::new(AEADKey::zero());
+            match self.aead_algorithm {
+                AEADAlgorithm::ChaCha20Poly1305Ietf => {
                     crypto_aead_chacha20poly1305_ietf_keygen(res.as_mut_ptr());
                 }
-                res
-            }
-            AEADAlgorithm::AES256GCM => {
-                let mut res = Box::new([0u8; crypto_aead_aes256gcm_KEYBYTES as usize]);
-                unsafe {
+                AEADAlgorithm::AES256GCM => {
                     crypto_aead_aes256gcm_keygen(res.as_mut_ptr());
                 }
-                res
             }
+            res
         }
     }
 

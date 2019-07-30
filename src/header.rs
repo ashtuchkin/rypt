@@ -61,12 +61,12 @@ fn recipient_secret_key(
         Credential::Password(password) => {
             let mut salt: KdfSalt = Default::default();
             salt.copy_from_slice(&cryptosys.hmac(&*ephemeral_pk, KDF_SALT_NONCE)[..KDF_SALT_LEN]);
-            cryptosys.key_derivation(&password, &salt)
+            Box::new((*cryptosys.key_derivation(&password, &salt)).into())
         }
         Credential::SecretKey(secret_key) => {
             let mut composed_key = ephemeral_pk.to_vec();
             composed_key.extend(secret_key);
-            cryptosys.hmac(&composed_key, SYMMETRIC_SECRET_NONCE)
+            Box::new((*cryptosys.hmac(&composed_key, SYMMETRIC_SECRET_NONCE)).into())
         }
         _ => panic!("Unexpected credential type"),
     }
@@ -191,7 +191,7 @@ fn decrypt_payload_for_recipient(
         Credential::Password(_) | Credential::SecretKey(_) => {
             recipient_secret_key(&*cryptosys, &ephemeral_pk, credential)
         }
-        _ => Box::new(AEADKey::default()),
+        _ => unsafe { Box::new(AEADKey::zero()) },
     };
 
     encrypted_recipients

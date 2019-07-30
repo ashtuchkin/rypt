@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use failure::{bail, ensure, Fallible};
 
-use crate::crypto::{AEADKey, PrivateKey, PublicKey, AEAD_KEY_LEN};
+use crate::crypto::{PrivateKey, PublicKey, AEAD_KEY_LEN};
 use crate::runtime_env::RuntimeEnvironment;
 use crate::{util, PKG_NAME, PKG_VERSION};
 use std::convert::TryInto;
@@ -26,7 +26,7 @@ pub struct InputOutputStream {
 
 pub enum Credential {
     Password(String),
-    SecretKey(AEADKey),
+    SecretKey([u8; AEAD_KEY_LEN]),
     PublicKey(PublicKey),   // Only valid for encryption
     PrivateKey(PrivateKey), // Only valid for decryption
 }
@@ -186,7 +186,8 @@ Home page and documentation: <https://github.com/ashtuchkin/rypt>",
 
     let secret_key = matches.opt_str("secret-key-unsafe");
     if let Some(s) = secret_key {
-        let key_res: Result<AEADKey, _> = util::try_parse_hex_string(&s)?.as_slice().try_into();
+        let key_res: Result<[u8; AEAD_KEY_LEN], _> =
+            util::try_parse_hex_string(&s)?.as_slice().try_into();
         match key_res {
             Ok(key) => credentials.push(Credential::SecretKey(key)),
             Err(_) => bail!("Invalid secret key size, expected {} bytes", AEAD_KEY_LEN),
