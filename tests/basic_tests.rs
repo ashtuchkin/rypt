@@ -37,29 +37,29 @@ fn simple_file_encrypt_decrypt(
     dbg!(&secret_key);
 
     let output = util::main_cmd(&[
-        "--secret-key-unsafe",
+        "--symmetric-secret-key",
         &secret_key,
         algorithm,
         temp_file_path.to_str().unwrap(),
     ])?
     .output()?;
-    assert!(output.status.success());
     assert_eq!(std::str::from_utf8(&output.stdout)?, "");
     assert_eq!(std::str::from_utf8(&output.stderr)?, "");
+    assert!(output.status.success());
 
     assert!(temp_file_path_enc.exists());
     assert!(!temp_file_path.exists()); // Original file should be removed.
 
     let output = util::main_cmd(&[
         "-d",
-        "--secret-key-unsafe",
+        "--symmetric-secret-key",
         &secret_key,
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
-    assert!(output.status.success());
     assert_eq!(std::str::from_utf8(&output.stdout)?, "");
     assert_eq!(std::str::from_utf8(&output.stderr)?, "");
+    assert!(output.status.success());
 
     let decoded_contents = fs::read(temp_file_path)?;
     assert_eq!(decoded_contents, contents);
@@ -93,14 +93,14 @@ fn encrypt_decrypt_stdio() -> Fallible<()> {
     let plaintext = b"abc123";
     let password = "abc";
 
-    let output = util::main_cmd(&["--password-unsafe", password])?
+    let output = util::main_cmd(&["--password", password])?
         .stdin_buf(plaintext)?
         .output()?;
     assert_eq!(std::str::from_utf8(&output.stderr)?, "");
     assert!(output.status.success());
     let ciphertext = output.stdout;
 
-    let output = util::main_cmd(&["-d", "--password-unsafe", password])?
+    let output = util::main_cmd(&["-d", "--password", password])?
         .stdin_buf(ciphertext)?
         .output()?;
 

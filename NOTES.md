@@ -45,12 +45,89 @@ This is just internal thoughts, a lot of them stale.
 
 
 ## Public key infrastructure compatibility
- * PGP: ?
+ * PGP: Armored OpenPGP binary packets ("BEGIN PGP PRIVATE KEY BLOCK" / "BEGIN PGP PUBLIC KEY BLOCK")
+    * Keybase provides it, e.g. https://keybase.io/as/pgp_keys.asc
+    * Can be converted to ssh keys, see openpgp2ssh
+    * OpenPGP binary packets described in https://tools.ietf.org/html/rfc4880.
+      ECDSA with NIST curves extensions https://tools.ietf.org/html/rfc6637
+      EdDSA extension https://tools.ietf.org/html/draft-koch-eddsa-for-openpgp-04 
  * SSH keys (OpenSSH supports Ed25519 since 6.5) E.g. https://medium.com/risan/upgrade-your-ssh-key-to-ed25519-c6e8d60d3c54
+    * Github provides it, e.g. https://github.com/ashtuchkin.keys
     * ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519
     * Would need to decode public key and private key formats (potentially with password) https://stackoverflow.com/a/12750816/325300
-      pub format: base64, then uint32-len-prefixed "ssh-ed25519" (0x0b size), then the key itself (0x20 size).
+      public key format: "<type> <base64 payload> <comment>", payload is a concatenation of uint32-len-prefixed strings:
+        ssh-ed25519:
+          * "ssh-ed25519" (0x0b size),
+          * the key itself (0x20 size).
+        ecdsa-sha2-nistp256 (from https://coolaj86.com/articles/the-ssh-public-key-format/):
+          * "ecdsa-sha2-nistp256" (0x13 size)
+          * "nistp256" (0x08 size)
+          * the key itself (0x41)
+            * always 0x04 byte - means we're storing key in uncompressed format - both x and y coordinates are given
+            * x coordinate (32 bytes)
+            * y coordinate (32 bytes)
+      private key format: 
+        OpenSSH has its own proprietary format "-----BEGIN OPENSSH PRIVATE KEY-----"
+            * see https://coolaj86.com/articles/the-openssh-private-key-format/
+        Older OpenSSH and OpenSSL use Armored DER/ASN.1 (x.509) ("BEGIN RSA PRIVATE KEY" / "BEGIN EC PRIVATE KEY")
+            * https://coolaj86.com/articles/openssh-vs-openssl-key-formats/
+            * https://lapo.it/asn1js/  - online ASN.1 decoder
     * ssh-agent integration?
+
+<--
+6f 70 65 6e 73 73 68 2d 6b 65 79 2d 76 31 00  # Magic string "openssh-key-v1\0"
+00 00 00 04 | 6e 6f 6e 65   # Ciphername: "none" 
+00 00 00 04 | 6e 6f 6e 65   # KdfName: "none"
+00 00 00 00   # Kdf params, empty string
+00 00 00 01   # Number of keys, only 1 is supported.
+00 00 00 33    # Public key in SSH format:  
+   00 00 00 0b | 73 73 68 2d 65 64 32 35 35 31 39                 # "ssh-ed25519" 
+   00 00 00 20 | b8 60 4b 48 3a 8c 21 54 47 af ac fc 82 76 24 11  
+                 df 69 8b 76 f8 53 9f b7 4a 8b 3d 48 e9 ec 3f 26  # public key 
+00 00 00 98    # Private key, including padding to cipher block size or 8
+   71 5c bf bc   # Two random uint32-s, checked to be equal.
+   71 5c bf bc 
+   00 00 00 0b | 73 73 68 2d 65 64 32 35 35 31 39                 # "ssh-ed25519" again
+   00 00 00 20 | b8 60 4b 48 3a 8c 21 54 47 af ac fc 82 76 24 11  # public key again 
+                 df 69 8b 76 f8 53 9f b7 4a 8b 3d 48 e9 ec 3f 26  
+   00 00 00 40 | 68 22 05 28 d0 4c 46 29 e8 04 e7 2c 3a ec 30 b2  # ed25519 private key (32 bytes seed, 32 bytes public key)
+                 7b c4 f6 7b a6 b2 5d ad 4f d2 2b 4a a5 d5 23 43 
+                 b8 60 4b 48 3a 8c 21 54 47 af ac fc 82 76 24 11 
+                 df 69 8b 76 f8 53 9f b7 4a 8b 3d 48 e9 ec 3f 26   
+   00 00 00 0e | 61 73 68 74 75 63 68 6b 69 6e 40 6d 62 70        # comment:  ashtuchkin@mbp 
+   01 02 03 04 05 06 07  # Deterministic padding to 8 bytes
+
+NOTE: Actual private key is 32 bytes seed, starting from offset 0xA1. From these, everything else can be recovered.
+
+==============================================================
+
+6f 70 65 6e 73 73 68 2d  6b 65 79 2d 76 31 00    # Magic string "openssh-key-v1\0"
+00 00 00 0a | 61 65 73 32 35 36 2d 63 74 72   # Ciphername: aes256-ctr
+00 00 00 06 | 62 63 72 79 70 74  # Kdfname: bcrypt
+00 00 00 18 |  # Kdf params for bcrypt
+    00 00 00 10 | 1c 2f ed 68 19 65 53 32 58 56 5f ac df 1c cd 47   # Salt
+    00 00 00 10  # Rounds
+00 00 00 01   # Num keys
+00 00 00 33   # Public key
+   00 00 00 0b | 73 73 68 2d 65 64 32 35 35 31 39   # "ssh-ed25519"
+   00 00 00 20 | d7 8f 68 7a 94 c2 a5 b3 5a d1 f0 9b 68 1d d4 00 
+                 32 81 2d d9 72 44 32 20 ad 87 31 81 6a e8 4c 32 
+00 00 00 a0  # Encrypted private key. Note, we derive both cipher key and iv from kdf (request key_len + iv_len bytes).
+   c7 2f 83 f6 83 93 6c a0 2f 51 10 b9 90 61 ec ef
+   7c 03 03 2b be 1a 24 73 f4 a2 b0 9d e3 23 fb 81 
+   b6 2e 9d 24 29 dd a5 4b f9 29 ab cb e4 ba 02 31 
+   a3 1c e2 e1 9b c9 e4 2e a4 0b c9 42 79 6e 17 da 
+   fd b0 5d c6 e5 69 8d a1 11 ae a8 c4 7c 7d 1c 75 
+   cf 19 a6 00 17 bc 75 75 fb e3 88 5d c5 9d d2 91 
+   6f c4 fe ba 07 f1 e3 79 72 18 9f 7e bd eb 52 ff 
+   16 30 40 fa d3 0c 1a a1 7f cc 42 11 03 c6 33 f1 
+   c7 da 07 fd f8 3f c0 5e 8a 41 dd 77 38 64 0f 4b 
+   2a 52 f2 dd 38 8b 3d 68 5b dd f7 44 a3 f7 3a 85
+
+Encrypted len must be an even number of cipher blocks (16 for aes256-ctr).
+If cipher has auth, then it'll follow here. aes256-ctr doesn't.
+Should be no trailing data
+-->
 
 ## Public/private key encoding
 Looks like base58 (https://docs.rs/bs58) is the most widely used markdown-safe encoding. base62 from saltpack is okayish

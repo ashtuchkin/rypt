@@ -4,7 +4,7 @@ use std::mem::size_of;
 use failure::{bail, ensure, err_msg, Fallible, ResultExt};
 use prost::Message;
 
-use crate::cli::{Credential, Options};
+use crate::cli::{Credential, DecryptOptions, EncryptOptions};
 use crate::crypto::{
     instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, BoxNonce, CryptoSystem, HMacKey,
     KdfSalt, PrivateKey, PublicKey, AEAD_NONCE_LEN, BOX_NONCE_LEN, KDF_SALT_LEN,
@@ -28,7 +28,7 @@ const RECIP_BOX_IDX_POS: usize = BOX_NONCE_LEN - size_of::<u32>(); // Put recipi
 const COMPATIBILITY_VERSION: FormatVersion = FormatVersion::BasicEncryption;
 
 /// Create CryptoFamily enum (protobuf) based on command line options.
-fn cryptofamily_from_opts(opts: &Options) -> Option<CryptoFamily> {
+fn cryptofamily_from_opts(opts: &EncryptOptions) -> Option<CryptoFamily> {
     Some(CryptoFamily::Libsodium(LibsodiumCryptoFamily {
         aead_algorithm: match opts.fast_aead_algorithm {
             false => AeadAlgorithm::Chacha20poly1305.into(),
@@ -63,7 +63,7 @@ fn recipient_secret_key(
             salt.copy_from_slice(&cryptosys.hmac(&*ephemeral_pk, KDF_SALT_NONCE)[..KDF_SALT_LEN]);
             cryptosys.key_derivation(&password, &salt)
         }
-        Credential::SecretKey(secret_key) => {
+        Credential::SymmetricKey(secret_key) => {
             let mut composed_key = ephemeral_pk.to_vec();
             composed_key.extend(secret_key);
             cryptosys.hmac(&composed_key, SYMMETRIC_SECRET_NONCE)
@@ -94,7 +94,7 @@ fn encrypt_payload_for_recipient(
 ) -> Recipient {
     let recipient_payload = serialize_proto(recipient_payload).unwrap();
     let encrypted_payload = match credential {
-        Credential::Password(_) | Credential::SecretKey(_) => {
+        Credential::Password(_) | Credential::SymmetricKey(_) => {
             let secret_key = recipient_secret_key(&*cryptosys, &ephemeral_pk, credential);
             let nonce = recipient_secret_nonce(recipient_idx);
 
@@ -113,7 +113,7 @@ fn encrypt_payload_for_recipient(
     Recipient { encrypted_payload }
 }
 
-pub fn encrypt_header(opts: &Options) -> Fallible<(Vec<u8>, Box<StreamConverter>, usize)> {
+pub fn encrypt_header(opts: &EncryptOptions) -> Fallible<(Vec<u8>, Box<StreamConverter>, usize)> {
     let version = FormatVersion::BasicEncryption.into();
 
     let crypto_family = cryptofamily_from_opts(&opts);
@@ -188,7 +188,7 @@ fn decrypt_payload_for_recipient(
 ) -> Option<RecipientPayload> {
     // Compute secret key for each credential only once, as it can be slow to derive it from password.
     let secret_key = match credential {
-        Credential::Password(_) | Credential::SecretKey(_) => {
+        Credential::Password(_) | Credential::SymmetricKey(_) => {
             recipient_secret_key(&*cryptosys, &ephemeral_pk, credential)
         }
         _ => Box::new(AEADKey::default()),
@@ -198,7 +198,7 @@ fn decrypt_payload_for_recipient(
         .into_iter()
         .enumerate()
         .find_map(|(recipient_idx, recipient)| match credential {
-            Credential::Password(_) | Credential::SecretKey(_) => {
+            Credential::Password(_) | Credential::SymmetricKey(_) => {
                 let nonce = recipient_secret_nonce(recipient_idx);
                 cryptosys
                     .aead_decrypt_easy(&recipient.encrypted_payload, &secret_key, &nonce)
@@ -224,7 +224,7 @@ fn decrypt_payload_for_recipient(
 
 pub fn decrypt_header(
     serialized_header: &[u8],
-    opts: &Options,
+    opts: &DecryptOptions,
 ) -> Fallible<(Box<StreamConverter>, usize)> {
     let header: FileHeader = FileHeader::decode(serialized_header)
         .with_context(|e| format!("Invalid header protobuf: {}", e))?;

@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -7,15 +8,9 @@ use failure::{bail, ensure, Fallible};
 use crate::crypto::{AEADKey, PrivateKey, PublicKey, AEAD_KEY_LEN};
 use crate::runtime_env::RuntimeEnvironment;
 use crate::{util, PKG_NAME, PKG_VERSION};
-use std::convert::TryInto;
+use getopts::Matches;
 
 pub const DEFAULT_FILE_SUFFIX: &str = "rypt";
-
-#[derive(Debug, Copy, Clone)]
-pub enum OperationMode {
-    Encrypt,
-    Decrypt,
-}
 
 #[derive(Debug)]
 pub struct InputOutputStream {
@@ -24,57 +19,83 @@ pub struct InputOutputStream {
     pub remove_input_on_success: bool,
 }
 
+#[derive(Clone)]
 pub enum Credential {
     Password(String),
-    SecretKey(AEADKey),
-    PublicKey(PublicKey),   // Only valid for encryption
-    PrivateKey(PrivateKey), // Only valid for decryption
+    SymmetricKey(AEADKey),
+    PublicKey(PublicKey),
+    PrivateKey(PrivateKey),
 }
 
 impl std::fmt::Debug for Credential {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         match self {
-            Credential::Password(_) => write!(f, "Password")?,
-            Credential::SecretKey(_) => write!(f, "SecretKey")?,
-            Credential::PublicKey(_) => write!(f, "PublicKey")?,
-            Credential::PrivateKey(_) => write!(f, "PrivateKey")?,
+            Credential::Password(_) => write!(f, "Credential::Password"),
+            Credential::SymmetricKey(_) => write!(f, "Credential::SymmetricKey"),
+            Credential::PublicKey(_) => write!(f, "Credential::PublicKey"),
+            Credential::PrivateKey(_) => write!(f, "Credential::PrivateKey"),
         }
-        Ok(())
     }
 }
 
 #[derive(Debug)]
-pub struct Options {
-    pub mode: OperationMode,
-    pub fast_aead_algorithm: bool,
+pub struct EncryptOptions {
     pub credentials: Vec<Credential>,
+    pub fast_aead_algorithm: bool,
     pub associated_data: Vec<u8>,
     pub verbose: i32,
 }
 
-pub fn parse_command_line(
-    env: &RuntimeEnvironment,
-) -> Fallible<(Option<Options>, Vec<Fallible<InputOutputStream>>)> {
+#[derive(Debug)]
+pub struct DecryptOptions {
+    pub credentials: Vec<Credential>,
+    pub verbose: i32,
+}
+
+pub enum Command {
+    Encrypt(EncryptOptions, Vec<Fallible<InputOutputStream>>),
+    Decrypt(DecryptOptions, Vec<Fallible<InputOutputStream>>),
+    Help,
+    Version,
+}
+
+fn define_options() -> getopts::Options {
     let mut options = getopts::Options::new();
+
+    // Modes / subcommands
     options
-        .optflag("e", "encrypt", "force encryption mode (default)")
-        .optflag("d", "decrypt", "force decryption mode")
-        .optopt(
-            "",
-            "secret-key-unsafe",
-            "32 byte hex-encoded secret key, to be used instead of password (not recommended)",
-            "SECRET_KEY",
+        .optflag("e", "encrypt", "encrypt files (default)")
+        .optflag("d", "decrypt", "decrypt files")
+        .optflag("h", "help", "display this short help and exit")
+        .optflag("V", "version", "display version numbers and exit");
+
+    // Common flags
+    options
+        .optflagmulti(
+            "v",
+            "verbose",
+            "be verbose; specify twice for even more verbosity",
         )
-        .optopt(
+        .optflagmulti("q", "quiet", "be quiet; skip all unnecessary chatter");
+
+    // Encryption/decryption flags
+    options
+        .optmulti(
+            "p",
+            "password",
+            "read password interactively or from file; use several times for multiple passwords",
+            "FILENAME",
+        )
+        .optmulti(
             "",
-            "password-unsafe",
-            "provide password directly (not recommended)",
-            "PASSWORD",
+            "symmetric-secret-key",
+            "(advanced feature) read a 32-byte symmetric secret key from file",
+            "FILENAME",
         )
         .optflag(
             "",
             "fast",
-            "choose a faster, x86-specific encryption algorithm (AES256-GCM)",
+            "use a different encryption algorithm (AES256-GCM) that is faster, but supported only on newer x86 processors",
         )
         .optflag(
             "s",
@@ -89,50 +110,31 @@ pub fn parse_command_line(
                 DEFAULT_FILE_SUFFIX
             ),
             ".suf",
-        )
-        .optflagmulti(
-            "v",
-            "verbose",
-            "be verbose; specify twice for even more verbose",
-        )
-        .optflag("h", "help", "display this short help and exit")
-        .optflag("V", "version", "display the version numbers and exit");
+        );
+    options
+}
 
-    let matches = options.parse(&env.cmdline_args)?;
+#[derive(Clone, Copy)]
+enum OperationMode {
+    Encrypt,
+    Decrypt,
+    Help,
+    Version,
+}
 
-    // Process help and version right here.
-    if matches.opt_present("h") || (env.cmdline_args.is_empty() && env.stdin_is_tty) {
-        let mut stdout = env.stdout.replace(Box::new(io::sink()));
-        writeln!(
-            stdout,
-            "\
-Usage: {} [OPTION].. [FILE]..
-Encrypt or decrypt FILEs
+const MODES: &[(&str, OperationMode); 4] = &[
+    ("e", OperationMode::Encrypt),
+    ("d", OperationMode::Decrypt),
+    ("h", OperationMode::Help),
+    ("V", OperationMode::Version),
+];
 
-{}
-
-With no FILE, or when FILE is -, read standard input.
-
-Report bugs to Alexander Shtuchkin <ashtuchkin@gmail.com>.
-Home page and documentation: <https://github.com/ashtuchkin/rypt>",
-            env.program_name.to_string_lossy(),
-            options.usage("").trim()
-        )?;
-        return Ok(Default::default());
-    } else if matches.opt_present("V") {
-        let mut stdout = env.stdout.replace(Box::new(io::sink()));
-        writeln!(stdout, "{} {}", PKG_NAME, PKG_VERSION)?;
-        let libsodium_version =
-            unsafe { std::ffi::CStr::from_ptr(libsodium_sys::sodium_version_string()) };
-        writeln!(stdout, "libsodium {}", libsodium_version.to_str()?)?;
-        return Ok(Default::default());
+fn get_mode(matches: &Matches, is_empty: bool) -> OperationMode {
+    if is_empty {
+        return OperationMode::Help;
     }
 
-    // Figure out the mode: use the last mode-related argument, or Encrypt by default.
-    const MODES: &[(&str, OperationMode); 2] =
-        &[("e", OperationMode::Encrypt), ("d", OperationMode::Decrypt)];
-
-    let mode: OperationMode = MODES
+    let last_mode = MODES
         .iter()
         .flat_map(|(cmdline_arg, mode)| {
             matches
@@ -141,9 +143,34 @@ Home page and documentation: <https://github.com/ashtuchkin/rypt>",
                 .map(move |pos| (pos, *mode))
         })
         .max_by_key(|(pos, _)| *pos)
-        .unwrap_or((0, OperationMode::Encrypt))
-        .1;
+        .map(|(_, val)| val);
 
+    // If no mode is given, calculate the default.
+    last_mode.unwrap_or(OperationMode::Encrypt)
+}
+
+fn get_credentials(matches: &Matches) -> Fallible<Vec<Credential>> {
+    let mut credentials = vec![];
+    if let Some(password) = matches.opt_str("password") {
+        credentials.push(Credential::Password(password));
+    }
+
+    let secret_key = matches.opt_str("symmetric-secret-key");
+    if let Some(s) = secret_key {
+        let key_res: Result<AEADKey, _> = util::try_parse_hex_string(&s)?.as_slice().try_into();
+        match key_res {
+            Ok(key) => credentials.push(Credential::SymmetricKey(key)),
+            Err(_) => bail!("Invalid secret key size, expected {} bytes", AEAD_KEY_LEN),
+        }
+    }
+    Ok(credentials)
+}
+
+fn get_input_output_streams(
+    matches: &Matches,
+    env: &RuntimeEnvironment,
+    is_encrypt: bool,
+) -> Vec<Fallible<InputOutputStream>> {
     // Figure out the encrypted file suffix, ensuring it always starts with a '.'
     let mut suffix = matches
         .opt_str("S")
@@ -172,8 +199,11 @@ Home page and documentation: <https://github.com/ashtuchkin/rypt>",
     let streams = input_paths
         .into_iter()
         .map(|input_path| {
-            let (output_path, remove_input_on_success) =
-                get_output_path(&input_path, mode, &suffix, &env)?;
+            let (output_path, remove_input_on_success) = if is_encrypt {
+                get_encrypt_output_path(&input_path, &suffix, &env)?
+            } else {
+                get_decrypt_output_path(&input_path, &suffix, &env)?
+            };
             Ok(InputOutputStream {
                 input_path,
                 output_path,
@@ -181,75 +211,110 @@ Home page and documentation: <https://github.com/ashtuchkin/rypt>",
             })
         })
         .collect();
-
-    let mut credentials: Vec<Credential> = vec![];
-
-    let secret_key = matches.opt_str("secret-key-unsafe");
-    if let Some(s) = secret_key {
-        let key_res: Result<AEADKey, _> = util::try_parse_hex_string(&s)?.as_slice().try_into();
-        match key_res {
-            Ok(key) => credentials.push(Credential::SecretKey(key)),
-            Err(_) => bail!("Invalid secret key size, expected {} bytes", AEAD_KEY_LEN),
-        }
-    };
-
-    if let Some(password) = matches.opt_str("password-unsafe") {
-        credentials.push(Credential::Password(password));
-    }
-
-    Ok((
-        Some(Options {
-            mode,
-            fast_aead_algorithm: matches.opt_present("fast"),
-            credentials,
-            verbose: matches.opt_count("v") as i32,
-            associated_data: vec![],
-        }),
-        streams,
-    ))
+    streams
 }
 
-fn get_output_path(
+pub fn parse_command_line(env: &RuntimeEnvironment) -> Fallible<Command> {
+    let options = define_options();
+    let matches = options.parse(&env.cmdline_args)?;
+    let verbose = matches.opt_count("v") as i32 - matches.opt_count("q") as i32;
+
+    // Figure out the mode: use the last mode argument, or Help/Encrypt by default.
+    Ok(match get_mode(&matches, env.cmdline_args.is_empty()) {
+        OperationMode::Encrypt => Command::Encrypt(
+            EncryptOptions {
+                credentials: get_credentials(&matches)?,
+                fast_aead_algorithm: matches.opt_present("fast"),
+                associated_data: vec![],
+                verbose,
+            },
+            get_input_output_streams(&matches, &env, true),
+        ),
+        OperationMode::Decrypt => Command::Decrypt(
+            DecryptOptions {
+                credentials: get_credentials(&matches)?,
+                verbose,
+            },
+            get_input_output_streams(&matches, &env, false),
+        ),
+        OperationMode::Help => Command::Help,
+        OperationMode::Version => Command::Version,
+    })
+}
+
+pub fn print_help(env: &RuntimeEnvironment) -> Fallible<()> {
+    let options = define_options();
+    let mut stdout = env.stdout.replace(Box::new(io::sink()));
+    writeln!(
+        stdout,
+        "\
+Usage: {} [OPTION].. [FILE]..
+Encrypt or decrypt FILEs
+
+{}
+
+With no FILE, or when FILE is -, read standard input.
+
+Report bugs to Alexander Shtuchkin <ashtuchkin@gmail.com>.
+Home page and documentation: <https://github.com/ashtuchkin/rypt>",
+        env.program_name.to_string_lossy(),
+        options.usage("").trim()
+    )?;
+    Ok(())
+}
+
+pub fn print_version(env: &RuntimeEnvironment) -> Fallible<()> {
+    let mut stdout = env.stdout.replace(Box::new(io::sink()));
+    writeln!(stdout, "{} {}", PKG_NAME, PKG_VERSION)?;
+    let libsodium_version =
+        unsafe { std::ffi::CStr::from_ptr(libsodium_sys::sodium_version_string()) };
+    writeln!(stdout, "libsodium {}", libsodium_version.to_str()?)?;
+    Ok(())
+}
+
+fn get_encrypt_output_path(
     input_path: &Path,
-    mode: OperationMode,
     suffix: &OsString,
     env: &RuntimeEnvironment,
 ) -> Fallible<(PathBuf, bool)> {
     if input_path.to_str() == Some("-") {
-        match mode {
-            OperationMode::Encrypt => ensure!(
-                !env.stdout_is_tty,
-                "Encrypted data cannot be written to a terminal"
-            ),
-            OperationMode::Decrypt => ensure!(
-                !env.stdin_is_tty,
-                "Encrypted data cannot be read from a terminal."
-            ),
-        };
+        ensure!(
+            !env.stdout_is_tty,
+            "Encrypted data cannot be written to a terminal"
+        );
         Ok((PathBuf::from("-"), false))
     } else {
-        match mode {
-            OperationMode::Encrypt => {
-                let mut new_ext = input_path.extension().unwrap_or_default().to_os_string();
-                ensure!(
-                    &new_ext != suffix,
-                    "{}: Unexpected file extension, skipping. Did you mean to decrypt (-d) this file?",
-                    input_path.to_string_lossy()
-                );
-                if !new_ext.is_empty() {
-                    new_ext.push(".");
-                }
-                new_ext.push(suffix);
-                Ok((input_path.with_extension(new_ext), true))
-            }
-            OperationMode::Decrypt => {
-                ensure!(
-                    input_path.extension() == Some(&suffix),
-                    "{}: Unexpected file extension, skipping.",
-                    input_path.to_string_lossy()
-                );
-                Ok((input_path.with_extension(""), true))
-            }
+        let mut new_ext = input_path.extension().unwrap_or_default().to_os_string();
+        ensure!(
+            &new_ext != suffix,
+            "{}: Unexpected file extension, skipping. Did you mean to decrypt (-d) this file?",
+            input_path.to_string_lossy()
+        );
+        if !new_ext.is_empty() {
+            new_ext.push(".");
         }
+        new_ext.push(suffix);
+        Ok((input_path.with_extension(new_ext), true))
+    }
+}
+
+fn get_decrypt_output_path(
+    input_path: &Path,
+    suffix: &OsString,
+    env: &RuntimeEnvironment,
+) -> Fallible<(PathBuf, bool)> {
+    if input_path.to_str() == Some("-") {
+        ensure!(
+            !env.stdin_is_tty,
+            "Encrypted data cannot be read from a terminal."
+        );
+        Ok((PathBuf::from("-"), false))
+    } else {
+        ensure!(
+            input_path.extension() == Some(&suffix),
+            "{}: Unexpected file extension, skipping.",
+            input_path.to_string_lossy()
+        );
+        Ok((input_path.with_extension(""), true))
     }
 }
