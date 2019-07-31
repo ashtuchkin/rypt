@@ -5,7 +5,9 @@ use std::io::{self, Read, Write};
 
 use failure::{Fallible, ResultExt};
 
-use crate::cli::{parse_command_line, print_help, print_version, Command, InputOutputStream};
+use crate::cli::{
+    parse_command_line, print_help, print_version, Command, InputOutputStream, InputOutputStreams,
+};
 use crate::header::{decrypt_header, encrypt_header};
 use crate::header_io::{read_header, write_header};
 use crate::progress::ProgressPrinter;
@@ -67,7 +69,7 @@ fn open_streams(
 
 fn convert_streams(
     env: &RuntimeEnvironment,
-    io_streams: Vec<Fallible<InputOutputStream>>,
+    io_streams: InputOutputStreams,
     verbose: i32,
     create_converter: impl Fn(&mut Read, &mut Write) -> Fallible<(Box<StreamConverter>, usize)>,
 ) -> Fallible<()> {

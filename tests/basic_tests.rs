@@ -3,6 +3,7 @@ use rand::{thread_rng, RngCore};
 use rypt::cli::DEFAULT_FILE_SUFFIX;
 use rypt::util::to_hex_string;
 use std::fs;
+use std::io::Write;
 use util::CommandExt;
 
 mod util;
@@ -35,10 +36,13 @@ fn simple_file_encrypt_decrypt(
     dbg!(&temp_file_path);
     dbg!(&temp_file_path_enc);
     dbg!(&secret_key);
+    let mut secret_key_file = tempfile::NamedTempFile::new()?;
+    secret_key_file.write_all(secret_key.as_bytes())?;
+    let secret_key_file_path = secret_key_file.path().to_str().unwrap();
 
     let output = util::main_cmd(&[
-        "--symmetric-secret-key",
-        &secret_key,
+        "--symmetric-key-file",
+        secret_key_file_path,
         algorithm,
         temp_file_path.to_str().unwrap(),
     ])?
@@ -52,8 +56,8 @@ fn simple_file_encrypt_decrypt(
 
     let output = util::main_cmd(&[
         "-d",
-        "--symmetric-secret-key",
-        &secret_key,
+        "--symmetric-key-file",
+        secret_key_file_path,
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -91,16 +95,18 @@ fn simple_file_encrypt_decrypt_without_extension_xchacha20() -> Fallible<()> {
 #[test]
 fn encrypt_decrypt_stdio() -> Fallible<()> {
     let plaintext = b"abc123";
-    let password = "abc";
+    let mut password_file = tempfile::NamedTempFile::new()?;
+    password_file.write_all(b"abc")?;
+    let password_file_path = password_file.path().to_str().unwrap();
 
-    let output = util::main_cmd(&["--password", password])?
+    let output = util::main_cmd(&["--password-file", password_file_path])?
         .stdin_buf(plaintext)?
         .output()?;
     assert_eq!(std::str::from_utf8(&output.stderr)?, "");
     assert!(output.status.success());
     let ciphertext = output.stdout;
 
-    let output = util::main_cmd(&["-d", "--password", password])?
+    let output = util::main_cmd(&["-d", "--password-file", password_file_path])?
         .stdin_buf(ciphertext)?
         .output()?;
 

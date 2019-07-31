@@ -1,6 +1,4 @@
 # P0
- * Read password from stdin
-    * Twice for encrypt, once for decrypt
  * Remove output file on error.
  * Support Public Key derivation:
     * Command line arguments providing receiver public key (required) and my private key (optional)

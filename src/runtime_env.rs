@@ -16,14 +16,17 @@ pub struct RuntimeEnvironment {
     pub stderr: RefCell<Writer>,
     pub stdin_is_tty: bool,
     pub stdout_is_tty: bool,
+    pub stderr_is_tty: bool,
 }
 
 impl RuntimeEnvironment {
     pub fn new_from_process_env() -> RuntimeEnvironment {
         let stdin = io::stdin();
         let stdout = io::stdout();
+        let stderr = io::stderr();
         let stdin_is_tty = termion::is_tty(&stdin);
         let stdout_is_tty = termion::is_tty(&stdout);
+        let stderr_is_tty = termion::is_tty(&stderr);
         let mut cmdline_args: Vec<OsString> = env::args_os().collect();
         let program_name = if !cmdline_args.is_empty() {
             cmdline_args.remove(0)
@@ -37,9 +40,10 @@ impl RuntimeEnvironment {
             env_vars: env::vars_os().collect(),
             stdin: RefCell::new(Box::new(stdin)),
             stdout: RefCell::new(Box::new(stdout)),
-            stderr: RefCell::new(Box::new(io::stderr())),
+            stderr: RefCell::new(Box::new(stderr)),
             stdin_is_tty,
             stdout_is_tty,
+            stderr_is_tty,
         }
     }
 }
@@ -55,6 +59,7 @@ impl Default for RuntimeEnvironment {
             stderr: RefCell::new(Box::new(io::sink())),
             stdin_is_tty: true,
             stdout_is_tty: true,
+            stderr_is_tty: true,
         }
     }
 }
