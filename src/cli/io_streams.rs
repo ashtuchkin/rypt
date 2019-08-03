@@ -19,7 +19,7 @@ pub(super) fn get_input_output_streams(
     Ok(if stream_mode {
         ensure!(
             matches.free.len() <= 1,
-            "Streaming mode only allows a single input stream"
+            "Stdin/stdout mode only supports a single input"
         );
         let input = match matches.free.first().map(String::as_str) {
             None | Some("-") => {
