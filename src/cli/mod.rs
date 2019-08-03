@@ -1,35 +1,18 @@
-use std::io::{self, Write};
-
 use failure::Fallible;
 use getopts::Matches;
 
-use crate::crypto::{AEADKey, PrivateKey, PublicKey};
+use crate::cli::credentials::get_credentials;
+pub use crate::cli::credentials::Credential;
+pub use crate::cli::help::{print_help, print_version};
+use crate::cli::io_streams::get_input_output_streams;
 use crate::io_streams::InputOutputStream;
 use crate::runtime_env::RuntimeEnvironment;
-use crate::{PKG_NAME, PKG_VERSION};
 
 mod credentials;
+mod help;
 mod io_streams;
 
 pub const DEFAULT_FILE_SUFFIX: &str = "rypt";
-
-pub enum Credential {
-    Password(String),
-    SymmetricKey(AEADKey),
-    PublicKey(PublicKey),   // Only for encryption
-    PrivateKey(PrivateKey), // Only for decryption
-}
-
-impl std::fmt::Debug for Credential {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        match self {
-            Credential::Password(_) => write!(f, "Credential::Password"),
-            Credential::SymmetricKey(_) => write!(f, "Credential::SymmetricKey"),
-            Credential::PublicKey(_) => write!(f, "Credential::PublicKey"),
-            Credential::PrivateKey(_) => write!(f, "Credential::PrivateKey"),
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct EncryptOptions {
@@ -46,8 +29,8 @@ pub struct DecryptOptions {
 }
 
 pub enum Command {
-    Encrypt(EncryptOptions, Vec<InputOutputStream>),
-    Decrypt(DecryptOptions, Vec<InputOutputStream>),
+    Encrypt(Vec<InputOutputStream>, EncryptOptions),
+    Decrypt(Vec<InputOutputStream>, DecryptOptions),
     Help,
     Version,
 }
@@ -102,7 +85,7 @@ fn define_options() -> getopts::Options {
         .optflag(
             "k",
             "keep-files",
-            "don't delete input files on successful encryption",
+            "don't delete original files on successful operation",
         )
         .optflag(
             "s",
@@ -163,53 +146,27 @@ pub fn parse_command_line(env: &RuntimeEnvironment) -> Fallible<Command> {
 
     // Figure out the mode: use the last mode argument, or Help/Encrypt by default.
     Ok(match get_mode(&matches, env.cmdline_args.is_empty()) {
-        OperationMode::Encrypt => Command::Encrypt(
-            EncryptOptions {
-                credentials: credentials::get_credentials(&matches, &env, true)?,
+        OperationMode::Encrypt => {
+            let streams = get_input_output_streams(&matches, &env, verbose, true)?;
+            let credentials = get_credentials(&matches, &env, true)?;
+            let options = EncryptOptions {
+                credentials,
                 fast_aead_algorithm: matches.opt_present("fast"),
                 associated_data: vec![],
                 verbose,
-            },
-            io_streams::get_input_output_streams(&matches, &env, true)?,
-        ),
-        OperationMode::Decrypt => Command::Decrypt(
-            DecryptOptions {
-                credentials: credentials::get_credentials(&matches, &env, false)?,
+            };
+            Command::Encrypt(streams, options)
+        }
+        OperationMode::Decrypt => {
+            let streams = get_input_output_streams(&matches, &env, verbose, false)?;
+            let credentials = get_credentials(&matches, &env, false)?;
+            let options = DecryptOptions {
+                credentials,
                 verbose,
-            },
-            io_streams::get_input_output_streams(&matches, &env, false)?,
-        ),
+            };
+            Command::Decrypt(streams, options)
+        }
         OperationMode::Help => Command::Help,
         OperationMode::Version => Command::Version,
     })
-}
-
-pub fn print_help(env: &RuntimeEnvironment) -> Fallible<()> {
-    let options = define_options();
-    let mut stdout = env.stdout.replace(Box::new(io::sink()));
-    writeln!(
-        stdout,
-        "\
-Usage: {} [OPTION].. [FILE]..
-Encrypt or decrypt FILEs
-
-{}
-
-With no FILE, or when FILE is -, read standard input.
-
-Report bugs to Alexander Shtuchkin <ashtuchkin@gmail.com>.
-Home page and documentation: <https://github.com/ashtuchkin/rypt>",
-        env.program_name.to_string_lossy(),
-        options.usage("").trim()
-    )?;
-    Ok(())
-}
-
-pub fn print_version(env: &RuntimeEnvironment) -> Fallible<()> {
-    let mut stdout = env.stdout.replace(Box::new(io::sink()));
-    writeln!(stdout, "{} {}", PKG_NAME, PKG_VERSION)?;
-    let libsodium_version =
-        unsafe { std::ffi::CStr::from_ptr(libsodium_sys::sodium_version_string()) };
-    writeln!(stdout, "libsodium {}", libsodium_version.to_str()?)?;
-    Ok(())
 }

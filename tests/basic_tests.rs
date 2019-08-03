@@ -23,7 +23,7 @@ fn help_message() -> Fallible<()> {
 fn simple_file_encrypt_decrypt(
     rng: &mut RngCore,
     extension: &str,
-    algorithm: &str,
+    algorithm_args: &[&str],
 ) -> Fallible<()> {
     let (temp_file_path, contents) = util::create_temp_file(rng, extension)?;
     let ext = if extension.is_empty() {
@@ -40,13 +40,13 @@ fn simple_file_encrypt_decrypt(
     secret_key_file.write_all(secret_key.as_bytes())?;
     let secret_key_file_path = secret_key_file.path().to_str().unwrap();
 
-    let output = util::main_cmd(&[
+    let args = &[
         "--symmetric-key-file",
         secret_key_file_path,
-        algorithm,
+        "-q",
         temp_file_path.to_str().unwrap(),
-    ])?
-    .output()?;
+    ];
+    let output = util::main_cmd(&[algorithm_args, args].concat())?.output()?;
     assert_eq!(std::str::from_utf8(&output.stdout)?, "");
     assert_eq!(std::str::from_utf8(&output.stderr)?, "");
     assert!(output.status.success());
@@ -58,6 +58,7 @@ fn simple_file_encrypt_decrypt(
         "-d",
         "--symmetric-key-file",
         secret_key_file_path,
+        "-q",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -74,22 +75,22 @@ fn simple_file_encrypt_decrypt(
 
 #[test]
 fn simple_file_encrypt_decrypt_with_extension_aes256gcm() -> Fallible<()> {
-    simple_file_encrypt_decrypt(&mut thread_rng(), "bin", "--fast")
+    simple_file_encrypt_decrypt(&mut thread_rng(), "bin", &["--fast"])
 }
 
 #[test]
 fn simple_file_encrypt_decrypt_without_extension_aes256gcm() -> Fallible<()> {
-    simple_file_encrypt_decrypt(&mut thread_rng(), "", "--fast")
+    simple_file_encrypt_decrypt(&mut thread_rng(), "", &["--fast"])
 }
 
 #[test]
 fn simple_file_encrypt_decrypt_with_extension_xchacha20() -> Fallible<()> {
-    simple_file_encrypt_decrypt(&mut thread_rng(), "bin", "-q")
+    simple_file_encrypt_decrypt(&mut thread_rng(), "bin", &[])
 }
 
 #[test]
 fn simple_file_encrypt_decrypt_without_extension_xchacha20() -> Fallible<()> {
-    simple_file_encrypt_decrypt(&mut thread_rng(), "", "-q")
+    simple_file_encrypt_decrypt(&mut thread_rng(), "", &[])
 }
 
 #[test]

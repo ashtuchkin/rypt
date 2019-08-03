@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use failure::Fallible;
 
 use crate::cli::{parse_command_line, print_help, print_version, Command};
+pub use crate::errors::EarlyTerminationError;
 use crate::header::{decrypt_header, encrypt_header};
 use crate::header_io::{read_header, write_header};
 use crate::io_streams::InputOutputStream;
@@ -16,6 +17,7 @@ use std::sync::Arc;
 
 pub mod cli;
 mod crypto;
+mod errors;
 mod header;
 mod header_io;
 mod io_streams;
@@ -31,7 +33,7 @@ pub mod util;
 pub const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PKG_NAME: &str = env!("CARGO_PKG_NAME");
 
-fn crypt_streams(
+fn convert_streams(
     io_streams: Vec<InputOutputStream>,
     verbose: i32,
     mut stderr: &mut Writer,
@@ -71,7 +73,10 @@ fn crypt_streams(
 
         std::mem::drop(progress_printer); // Release mutable borrow of stderr.
         if let Err(err) = res {
-            writeln!(stderr, "{}: {}", PKG_NAME, err).ok();
+            match err.downcast::<EarlyTerminationError>() {
+                Ok(_) => (), // Don't print anything in case of early termination
+                Err(err) => writeln!(stderr, "{}: {}", PKG_NAME, err).unwrap_or(()),
+            }
         }
     }
     Ok(())
@@ -79,7 +84,7 @@ fn crypt_streams(
 
 pub fn run(env: &RuntimeEnvironment) -> Fallible<()> {
     match parse_command_line(&env)? {
-        Command::Encrypt(opts, streams) => crypt_streams(
+        Command::Encrypt(streams, opts) => convert_streams(
             streams,
             opts.verbose,
             &mut env.stderr.borrow_mut(),
@@ -90,7 +95,7 @@ pub fn run(env: &RuntimeEnvironment) -> Fallible<()> {
                 Ok((stream_converter, chunk_size, 0))
             },
         ),
-        Command::Decrypt(opts, streams) => crypt_streams(
+        Command::Decrypt(streams, opts) => convert_streams(
             streams,
             opts.verbose,
             &mut env.stderr.borrow_mut(),

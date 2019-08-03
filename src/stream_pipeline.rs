@@ -1,12 +1,13 @@
 use std::io::{ErrorKind, Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 
 use crossbeam_channel::{Receiver, SendError, Sender};
 use failure::{bail, Fallible};
 
+use crate::errors::EarlyTerminationError;
 use crate::types::{Chunk, ChunkConfig, StreamConverter};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in channels.
 
@@ -141,7 +142,7 @@ pub fn convert_stream(
     }
 
     if terminate_flag.load(Ordering::Relaxed) {
-        bail!("Terminated");
+        return Err(EarlyTerminationError {}.into());
     }
     Ok(())
 }

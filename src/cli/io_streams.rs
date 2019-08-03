@@ -11,6 +11,7 @@ use crate::RuntimeEnvironment;
 pub(super) fn get_input_output_streams(
     matches: &Matches,
     env: &RuntimeEnvironment,
+    verbose: i32,
     is_encrypt: bool,
 ) -> Fallible<Vec<InputOutputStream>> {
     let stream_mode = matches.opt_present("s") || matches.free.is_empty() || matches.free == &["-"];
@@ -44,10 +45,14 @@ pub(super) fn get_input_output_streams(
             output: Ok(output),
         }]
     } else {
+        if matches.free.iter().any(|s| s.trim() == "-") {
+            bail!("Stdin/stdout designator '-' can only be specified once and no other files can be processed at the same time.");
+        }
+
         let extension = get_encrypted_file_extension(&matches);
         let remove_on_success = !matches.opt_present("k");
 
-        matches
+        let io_streams: Vec<InputOutputStream> = matches
             .free
             .iter()
             .map(PathBuf::from)
@@ -65,7 +70,24 @@ pub(super) fn get_input_output_streams(
                     output: output_path.map(|path| OutputStream::File { path }),
                 }
             })
-            .collect()
+            .collect();
+
+        // Bail right away if all files have failed.
+        if io_streams.iter().all(|io_stream| io_stream.output.is_err()) {
+            let io_stream = io_streams.into_iter().next().unwrap();
+            return Err(io_stream.output.unwrap_err());
+        }
+
+        if remove_on_success && verbose >= 0 {
+            let mut stderr = env.stderr.borrow_mut();
+            if is_encrypt {
+                writeln!(stderr, "NOTE: Original file(s) will be removed after successful encryption. Pass '-k' to keep them intact.")?;
+            } else {
+                writeln!(stderr, "NOTE: Encrypted file(s) will be removed after successful decryption. Pass '-k' to keep them intact.")?;
+            }
+        }
+
+        io_streams
     })
 }
 

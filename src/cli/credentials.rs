@@ -4,9 +4,28 @@ use std::fs;
 use failure::{ensure, format_err, Fallible, ResultExt};
 use getopts::Matches;
 
-use crate::cli::Credential;
+use crate::crypto::{AEADKey, PrivateKey, PublicKey};
+use crate::errors::EarlyTerminationError;
 use crate::util::try_parse_hex_string;
 use crate::RuntimeEnvironment;
+
+pub enum Credential {
+    Password(String),
+    SymmetricKey(AEADKey),
+    PublicKey(PublicKey),   // Only for encryption
+    PrivateKey(PrivateKey), // Only for decryption
+}
+
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            Credential::Password(_) => write!(f, "Credential::Password"),
+            Credential::SymmetricKey(_) => write!(f, "Credential::SymmetricKey"),
+            Credential::PublicKey(_) => write!(f, "Credential::PublicKey"),
+            Credential::PrivateKey(_) => write!(f, "Credential::PrivateKey"),
+        }
+    }
+}
 
 pub(super) fn get_credentials(
     matches: &Matches,
@@ -85,7 +104,7 @@ fn read_password(env: &RuntimeEnvironment, message: &str) -> Fallible<String> {
     writeln!(stderr)?;
 
     // NOTE: `res` will be Ok(None) if user entered Ctrl-C or Ctrl-D. We translate it to 'canceled'.
-    Ok(res?.ok_or_else(|| format_err!("Operation canceled."))?)
+    Ok(res?.ok_or_else(|| EarlyTerminationError {})?)
 }
 
 fn read_password_interactively(
@@ -97,7 +116,7 @@ fn read_password_interactively(
     ensure!(
         env.stdin_is_tty && env.stderr_is_tty,
         "Can't read password from a non-TTY stdin. \
-         Use '--password-file /dev/stdin' if you really know what you're doing."
+         Use '--password-file' if you'd like to provide password non-interactively."
     );
 
     let suffix = if num_passwords > 1 {
