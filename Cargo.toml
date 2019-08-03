@@ -18,6 +18,7 @@ bytes = "0.4.*"  # prost dependency
 crossbeam-channel = "0.3.*"
 getopts = "0.2.*"
 failure = "0.1.*"
+signal-hook = "0.1.*"
 
 # isatty, clear line, password input
 termion = "1.5.*"

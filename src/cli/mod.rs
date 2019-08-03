@@ -3,8 +3,8 @@ use std::io::{self, Write};
 use failure::Fallible;
 use getopts::Matches;
 
-pub use self::io_streams::{InputOutputStream, InputOutputStreams};
 use crate::crypto::{AEADKey, PrivateKey, PublicKey};
+use crate::io_streams::InputOutputStream;
 use crate::runtime_env::RuntimeEnvironment;
 use crate::{PKG_NAME, PKG_VERSION};
 
@@ -46,8 +46,8 @@ pub struct DecryptOptions {
 }
 
 pub enum Command {
-    Encrypt(EncryptOptions, InputOutputStreams),
-    Decrypt(DecryptOptions, InputOutputStreams),
+    Encrypt(EncryptOptions, Vec<InputOutputStream>),
+    Decrypt(DecryptOptions, Vec<InputOutputStream>),
     Help,
     Version,
 }
@@ -100,9 +100,14 @@ fn define_options() -> getopts::Options {
             "use a different encryption algorithm (AES256-GCM) that is faster, but supported only on newer x86 processors",
         )
         .optflag(
+            "k",
+            "keep-files",
+            "don't delete input files on successful encryption",
+        )
+        .optflag(
             "s",
             "stdout",
-            "write to standard output and don't delete input files",
+            "write to standard output; implies -k",
         )
         .optopt(
             "S",
@@ -165,14 +170,14 @@ pub fn parse_command_line(env: &RuntimeEnvironment) -> Fallible<Command> {
                 associated_data: vec![],
                 verbose,
             },
-            io_streams::get_input_output_streams(&matches, &env, true),
+            io_streams::get_input_output_streams(&matches, &env, true)?,
         ),
         OperationMode::Decrypt => Command::Decrypt(
             DecryptOptions {
                 credentials: credentials::get_credentials(&matches, &env, false)?,
                 verbose,
             },
-            io_streams::get_input_output_streams(&matches, &env, false),
+            io_streams::get_input_output_streams(&matches, &env, false)?,
         ),
         OperationMode::Help => Command::Help,
         OperationMode::Version => Command::Version,

@@ -1,5 +1,5 @@
 # Scratchpad
-This is just internal thoughts, a lot of them stale.
+Note, a lot of the information here is stale. Don't rely on it for anything.
 
 ## Command line ergonomics
  * Regular file(s):
@@ -160,7 +160,7 @@ There are a couple crates out there that are relevant, but not 100% fit:
    ----
    * Alternative: Use Nonce: for final chunk, set highest bit of message counter.
 
-# Algorithm-specific changes from libsodium (old)
+## Algorithm-specific changes from libsodium (old)
  * XChacha20Poly1305 adds 7 bytes random prefix to align ciphertext and plaintext blocks. Final chunk has TAG_FINAL.
  * AES256-GCM stores it's nonce in encryption header. Changes:
     * It uses nonce extension to 192 bit, using 
@@ -172,7 +172,7 @@ There are a couple crates out there that are relevant, but not 100% fit:
 
 https://crypto.stackexchange.com/questions/53104/is-it-safe-to-store-both-the-aes-related-data-and-the-pbkdf2-related-data-excep?rq=1
 
-# Public key algorithms
+## Public key algorithms
 Core algorithms: 
   * Key exchange: X25519 (ECDH over Curve25519, see https://libsodium.gitbook.io/doc/advanced/scalar_multiplication)
     * Private key: random 32 bytes; (or crypto_hash_sha512 of seed)
@@ -222,7 +222,7 @@ Questions and decisions:
   * What format do we use for private & public keys? 1) binary, 2) base64, 3) hex, 4) auto.
     Decision: ?
 
-# Testing executable
+## Testing executable
 TODO: Test using more common methods - actually running the executable
  * std::process only allows piping File to stdin, or going the spawn-write-wait path
    (https://doc.rust-lang.org/std/process/struct.Stdio.html)
@@ -246,7 +246,7 @@ TODO: Test using more common methods - actually running the executable
      * create pseudo-tty with 'nix' crate: use http://man7.org/linux/man-pages/man3/posix_openpt.3.html  (or openpty)
      -> Easier and safer to do ENV variables like MOCK_IS_TTY=stdin,stdout  
 
-# Releases
+## Releases
 Current plan is to use GitHub releases for distribution.
 Travis CI can build the software for all major platforms and then upload it to Github. See:
   * https://docs.travis-ci.com/user/deployment/releases/
@@ -254,12 +254,13 @@ Travis CI can build the software for all major platforms and then upload it to G
   * https://docs.travis-ci.com/user/reference/overview/ - environment reference (linux, mac, windows)
 
 Inspiration: https://medium.com/@kevinkreuzer/the-way-to-fully-automated-releases-in-open-source-projects-44c015f38fd6
+
 ## PGP problems
 https://crypto.stackexchange.com/a/12355
 
 Format: https://tools.ietf.org/html/rfc4880
 
-### Readme improvements
+## Readme improvements
  * Several modes to authenticate sender: signed, repudiable, anonymous. 
 
 

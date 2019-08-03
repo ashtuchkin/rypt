@@ -18,6 +18,7 @@ pub struct ProgressPrinter<'a> {
     last_printed_period: i64,
     printed_at_least_once: bool,
     filesize: Option<usize>,
+    written_bytes: usize,
     verbose: i32,
 }
 
@@ -31,6 +32,7 @@ impl<'a> ProgressPrinter<'a> {
             last_printed_period: -1,
             filesize: None,
             printed_at_least_once: false,
+            written_bytes: 0,
             verbose,
         }
     }
@@ -57,24 +59,25 @@ impl<'a> ProgressPrinter<'a> {
         if self.verbose <= 0 {
             return;
         }
+        self.written_bytes += written_bytes;
         let now = Instant::now();
         let elapsed = now - self.start_time;
 
         let period_id = (elapsed.as_millis() / PRINT_PERIOD.as_millis()) as i64;
         if period_id == self.last_printed_period {
-            *self.stamps.back_mut().unwrap() = (now, written_bytes);
+            *self.stamps.back_mut().unwrap() = (now, self.written_bytes);
         } else {
             self.last_printed_period = period_id;
-            self.stamps.push_back((now, written_bytes));
+            self.stamps.push_back((now, self.written_bytes));
             if self.stamps.len() > KEEP_STAMPS_COUNT {
                 self.stamps.pop_front();
             }
 
-            self.print_progress_line(false);
+            self.print_progress_line();
         }
     }
 
-    fn print_progress_line(&mut self, is_final: bool) {
+    fn print_progress_line(&mut self) {
         // Calculate the average over the last KEEP_STAMPS_COUNT periods.
         let mut speed = None;
         let (end_period_time, end_period_progress) = *self.stamps.back().unwrap();
@@ -87,7 +90,7 @@ impl<'a> ProgressPrinter<'a> {
 
         // Adjust end_period_progress to be < filesize and equal to it on final call.
         let written_bytes = if let Some(filesize) = self.filesize {
-            if end_period_progress > filesize || is_final {
+            if end_period_progress > filesize {
                 filesize
             } else {
                 end_period_progress
@@ -147,7 +150,7 @@ impl<'a> ProgressPrinter<'a> {
 impl<'a> Drop for ProgressPrinter<'a> {
     fn drop(&mut self) {
         if self.printed_at_least_once {
-            self.print_progress_line(true);
+            self.print_progress_line();
             write!(self.output, "\n\n").ok();
         }
     }

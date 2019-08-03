@@ -37,7 +37,7 @@ pub(super) fn get_credentials(
         credentials.push(password);
     }
 
-    ensure!(credentials.len() > 0, "No credentials provided");
+    ensure!(!credentials.is_empty(), "No credentials provided");
     Ok(credentials)
 }
 
@@ -50,7 +50,7 @@ fn read_password_file(filename: &str) -> Fallible<Vec<Credential>> {
         }
     }
     ensure!(
-        credentials.len() > 0,
+        !credentials.is_empty(),
         "File does not contain any passwords."
     );
     Ok(credentials)
@@ -73,7 +73,7 @@ fn read_symmetric_key_file(filename: &str) -> Fallible<Vec<Credential>> {
             })?;
         credentials.push(Credential::SymmetricKey(key));
     }
-    ensure!(credentials.len() > 0, "File does not contain any keys.");
+    ensure!(!credentials.is_empty(), "File does not contain any keys.");
     Ok(credentials)
 }
 

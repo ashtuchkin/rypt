@@ -84,12 +84,12 @@ fn simple_file_encrypt_decrypt_without_extension_aes256gcm() -> Fallible<()> {
 
 #[test]
 fn simple_file_encrypt_decrypt_with_extension_xchacha20() -> Fallible<()> {
-    simple_file_encrypt_decrypt(&mut thread_rng(), "bin", "")
+    simple_file_encrypt_decrypt(&mut thread_rng(), "bin", "-q")
 }
 
 #[test]
 fn simple_file_encrypt_decrypt_without_extension_xchacha20() -> Fallible<()> {
-    simple_file_encrypt_decrypt(&mut thread_rng(), "", "")
+    simple_file_encrypt_decrypt(&mut thread_rng(), "", "-q")
 }
 
 #[test]

@@ -31,7 +31,7 @@ File structure:
 read_header reads everything until the first chunk; write_header writes it.
 */
 
-pub fn read_header(reader: &mut Read) -> Fallible<Vec<u8>> {
+pub fn read_header(reader: &mut Read) -> Fallible<(Vec<u8>, usize)> {
     // 1. Read constant-length pre-header with file signature and header length.
     let mut pre_header = [0u8; PREHEADER_LEN];
     reader.read_exact(&mut pre_header)?;
@@ -54,7 +54,7 @@ pub fn read_header(reader: &mut Read) -> Fallible<Vec<u8>> {
     reader.read_exact(&mut buffer)?;
     buffer.truncate(header_len); // Remove padding
 
-    Ok(buffer)
+    Ok((buffer, PREHEADER_LEN + header_len + header_padding))
 }
 
 pub fn write_header(writer: &mut Write, serialized_header: &[u8]) -> Fallible<()> {

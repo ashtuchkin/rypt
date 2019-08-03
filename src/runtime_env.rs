@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 use std::io;
+use std::sync::{atomic::AtomicBool, Arc};
 
 pub type Reader = Box<io::Read + Send>;
 pub type Writer = Box<io::Write + Send>;
@@ -17,6 +18,7 @@ pub struct RuntimeEnvironment {
     pub stdin_is_tty: bool,
     pub stdout_is_tty: bool,
     pub stderr_is_tty: bool,
+    pub terminate_flag: Arc<AtomicBool>,
 }
 
 impl RuntimeEnvironment {
@@ -33,6 +35,9 @@ impl RuntimeEnvironment {
         } else {
             "".into()
         };
+        let terminate_flag = Arc::new(AtomicBool::new(false));
+        signal_hook::flag::register(signal_hook::SIGINT, terminate_flag.clone()).unwrap();
+        signal_hook::flag::register(signal_hook::SIGTERM, terminate_flag.clone()).unwrap();
 
         RuntimeEnvironment {
             program_name,
@@ -44,6 +49,7 @@ impl RuntimeEnvironment {
             stdin_is_tty,
             stdout_is_tty,
             stderr_is_tty,
+            terminate_flag,
         }
     }
 }
@@ -60,6 +66,7 @@ impl Default for RuntimeEnvironment {
             stdin_is_tty: true,
             stdout_is_tty: true,
             stderr_is_tty: true,
+            terminate_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 }

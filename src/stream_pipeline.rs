@@ -5,6 +5,8 @@ use crossbeam_channel::{Receiver, SendError, Sender};
 use failure::{bail, Fallible};
 
 use crate::types::{Chunk, ChunkConfig, StreamConverter};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in channels.
 
@@ -25,9 +27,9 @@ const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in c
 /// |                          |                                    ^
 /// |                        Chunks                              Chunks
 /// |                          V                                    |
-/// |                   -----------------                -----------------------
-/// | Input stream  ->  | Reader thread |  -- Chunks ->  | In-place conversion |
-/// |                  -----------------                -----------------------
+/// |                   -----------------                ----------------------------------
+/// | Input stream  ->  | Reader thread |  -- Chunks ->  | In-place encryption/decryption |
+/// |                   -----------------                ----------------------------------
 ///
 /// Main thread here only supplies initial Chunks to the pipeline, then redirects used Chunks back
 /// to the start of the pipeline. It also calls the progress callback to notify the caller.
@@ -37,6 +39,7 @@ pub fn convert_stream(
     output_stream: Box<Write + Send>,
     chunk_size: usize,
     progress_cb: &mut FnMut(usize),
+    terminate_flag: Arc<AtomicBool>,
 ) -> Fallible<()> {
     let ChunkConfig {
         input_chunk_asize,
@@ -77,10 +80,14 @@ pub fn convert_stream(
     }
 
     // Wait while data flows through the pipeline, resupplying used chunks back to the reader.
-    let mut processed_bytes = 0usize;
     for mut chunk in final_receiver {
+        // Check if we need to terminate early
+        if terminate_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
         // Calculate the size of the input Chunk that resulted in this output Chunk.
-        processed_bytes += chunk.buffer.len() - output_chunk_asize + input_chunk_asize;
+        let written_bytes = chunk.buffer.len() - output_chunk_asize + input_chunk_asize;
 
         // Reset the chunk
         chunk.buffer.resize(input_buffer_size, 0);
@@ -92,7 +99,7 @@ pub fn convert_stream(
         initial_sender.send(chunk).ok();
 
         // Call progress callback after sending the Chunk back, to avoid slowing down the pipe.
-        progress_cb(processed_bytes);
+        progress_cb(written_bytes);
     }
 
     // Propagate termination state back to the beginning of the pipeline, forcing reader to exit.
@@ -131,6 +138,10 @@ pub fn convert_stream(
             // panic handler anyway, so we don't bother.
             Err(_) => bail!("{} thread panic", operation.to_string()),
         }
+    }
+
+    if terminate_flag.load(Ordering::Relaxed) {
+        bail!("Terminated");
     }
     Ok(())
 }
