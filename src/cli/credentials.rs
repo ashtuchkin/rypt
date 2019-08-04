@@ -6,7 +6,7 @@ use getopts::Matches;
 
 use crate::crypto::{AEADKey, PrivateKey, PublicKey};
 use crate::errors::EarlyTerminationError;
-use crate::util::try_parse_hex_string;
+use crate::util::{try_parse_hex_string, try_parse_hex_string_checksummed};
 use crate::RuntimeEnvironment;
 
 pub enum Credential {
@@ -31,20 +31,63 @@ pub(super) fn get_credentials(
     matches: &Matches,
     env: &RuntimeEnvironment,
     is_encrypt: bool,
+    skip_checksum: bool,
 ) -> Fallible<Vec<Credential>> {
     let mut credentials = vec![];
 
     // Read the password files
     for filename in matches.opt_strs("password-file") {
-        let creds = read_password_file(&filename)
-            .with_context(|e| format!("Error reading password file {}: {}", filename, e))?;
+        let creds = read_file_lines(&filename, &|line| {
+            Ok(Credential::Password(line.to_string()))
+        })
+        .with_context(|e| format!("Error reading password file {}: {}", filename, e))?;
         credentials.extend(creds);
     }
 
     // Read symmetric key files
-    for filename in matches.opt_strs("symmetric-key-file") {
-        let creds = read_symmetric_key_file(&filename)
-            .with_context(|e| format!("Error reading symmetric key file {}: {}", filename, e))?;
+    for filename in matches.opt_strs("symmetric-key") {
+        let creds = read_file_lines(&filename, &|line| {
+            Ok(Credential::SymmetricKey(*from_hex32(line, true)?))
+        })
+        .with_context(|e| format!("Error reading symmetric key file {}: {}", filename, e))?;
+        credentials.extend(creds);
+    }
+
+    // Read public keys
+    for filename in matches.opt_strs("public-key") {
+        ensure!(
+            is_encrypt,
+            "Public keys should not be passed in when decrypting"
+        );
+        let creds = read_file_lines(&filename, &|line| {
+            Ok(Credential::PublicKey(*from_hex32(line, skip_checksum)?))
+        })
+        .with_context(|e| format!("Error reading public key file {}: {}", filename, e))?;
+        credentials.extend(creds);
+    }
+
+    // Read public keys provided directly
+    for public_key in matches.opt_strs("public-key-text") {
+        ensure!(
+            is_encrypt,
+            "Public keys should not be passed in when decrypting"
+        );
+        let public_key = from_hex32(&public_key, skip_checksum)
+            .with_context(|e| format!("Invalid public key {}: {}", public_key, e))?;
+
+        credentials.push(Credential::PublicKey(*public_key));
+    }
+
+    // Read private keys
+    for filename in matches.opt_strs("private-key") {
+        ensure!(
+            !is_encrypt,
+            "Private keys should not be passed in when encrypting"
+        );
+        let creds = read_file_lines(&filename, &|line| {
+            Ok(Credential::PrivateKey(*from_hex64(line, true)?))
+        })
+        .with_context(|e| format!("Error reading private key file {}: {}", filename, e))?;
         credentials.extend(creds);
     }
 
@@ -60,38 +103,46 @@ pub(super) fn get_credentials(
     Ok(credentials)
 }
 
-fn read_password_file(filename: &str) -> Fallible<Vec<Credential>> {
-    let mut credentials = vec![];
-    for line in fs::read_to_string(filename)?.lines() {
-        let password = line.trim();
-        if !password.is_empty() {
-            credentials.push(Credential::Password(password.to_owned()));
-        }
-    }
-    ensure!(
-        !credentials.is_empty(),
-        "File does not contain any passwords."
-    );
-    Ok(credentials)
+fn from_hex32(line: &str, skip_checksum: bool) -> Fallible<Box<[u8; 32]>> {
+    let bytes = if skip_checksum {
+        try_parse_hex_string(line)?
+    } else {
+        try_parse_hex_string_checksummed(line)?
+    };
+
+    Ok(Box::new(bytes.as_slice().try_into().map_err(|_| {
+        format_err!("Invalid key length (we expect 32 bytes, or 64 hex characters)")
+    })?))
 }
 
-fn read_symmetric_key_file(filename: &str) -> Fallible<Vec<Credential>> {
-    let mut credentials = vec![];
-    for (line_idx, line) in fs::read_to_string(filename)?.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
+fn from_hex64(line: &str, skip_checksum: bool) -> Fallible<Box<[u8; 64]>> {
+    let bytes = if skip_checksum {
+        try_parse_hex_string(line)?
+    } else {
+        try_parse_hex_string_checksummed(line)?
+    };
+    ensure!(
+        bytes.len() == 64,
+        "Invalid key length (we expect 64 bytes, or 128 hex characters)"
+    );
 
-        let key = try_parse_hex_string(line)
-            .map_err(|e| format_err!("{} on line {}", e, line_idx))?
-            .as_slice()
-            .try_into()
-            .map_err(|_| {
-                format_err!("Invalid key length on line {}; must be 32 bytes", line_idx)
-            })?;
-        credentials.push(Credential::SymmetricKey(key));
-    }
+    // [u8; 64] does not support TryInto<&[u8]>, so we do the conversion manually.
+    let mut res = Box::new([0u8; 64]);
+    res.copy_from_slice(&bytes);
+    Ok(res)
+}
+
+fn read_file_lines(
+    filename: &str,
+    line_to_cred_fn: &Fn(&str) -> Fallible<Credential>,
+) -> Fallible<Vec<Credential>> {
+    let credentials = fs::read_to_string(filename)?
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(line_to_cred_fn)
+        .collect::<Fallible<Vec<Credential>>>()?;
+
     ensure!(!credentials.is_empty(), "File does not contain any keys.");
     Ok(credentials)
 }

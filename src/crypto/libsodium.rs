@@ -30,6 +30,12 @@ pub enum AEADAlgorithm {
     AES256GCM = 2,
 }
 
+impl Default for AEADAlgorithm {
+    fn default() -> Self {
+        AEADAlgorithm::ChaCha20Poly1305Ietf
+    }
+}
+
 const ALL_AEAD_ALGORITHMS: &[AEADAlgorithm] = &[
     AEADAlgorithm::ChaCha20Poly1305Ietf,
     AEADAlgorithm::AES256GCM,

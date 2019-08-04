@@ -1,4 +1,4 @@
-use failure::{bail, Fallible};
+use failure::{Fail, Fallible};
 use prost::Message;
 use std::time::Duration;
 
@@ -48,18 +48,67 @@ pub fn to_hex_string(bytes: impl AsRef<[u8]>) -> String {
     bytes
         .as_ref()
         .iter()
-        .map(|b| format!("{:02X}", b))
+        .map(|b| format!("{:02x}", b))
         .collect::<Vec<String>>()
         .join("")
+}
+
+const SHA512_OUTPUT_BYTES: usize = libsodium_sys::crypto_hash_sha512_BYTES as usize;
+pub fn sha512(input: &[u8]) -> Vec<u8> {
+    unsafe {
+        let mut output = vec![0u8; SHA512_OUTPUT_BYTES];
+        libsodium_sys::crypto_hash_sha512(output.as_mut_ptr(), input.as_ptr(), input.len() as u64);
+        output
+    }
+}
+
+// Inspired by https://github.com/ethereum/EIPs/blob/master/EIPS/eip-55.md but use sha512 instead of keccak256
+pub fn to_hex_string_checksummed(bytes: impl AsRef<[u8]>) -> String {
+    let bytes = bytes.as_ref();
+    let hex_string = to_hex_string(bytes);
+    let hash_hex_string = to_hex_string(sha512(bytes));
+    hex_string
+        .chars()
+        .zip(hash_hex_string.chars().cycle())
+        .map(|(hex_char, hash_char)| {
+            if hash_char >= '8' {
+                hex_char.to_ascii_uppercase()
+            } else {
+                hex_char.to_ascii_lowercase()
+            }
+        })
+        .collect()
 }
 
 #[test]
 fn to_hex_string_test() {
     assert_eq!(to_hex_string(b"123abcxyz"), "31323361626378797A");
     assert_eq!(to_hex_string(b""), "");
+
+    assert_eq!(
+        to_hex_string_checksummed(b"123abcxyz"),
+        "31323361626378797A"
+    );
+    assert_eq!(
+        to_hex_string_checksummed(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff"),
+        "FfFfffffFFFFFfffFF"
+    );
+    assert_eq!(to_hex_string_checksummed(b""), "");
 }
 
-pub fn try_parse_hex_string(input_string: &str) -> Fallible<Vec<u8>> {
+#[derive(Fail, Debug, PartialEq)]
+pub enum ParseHexError {
+    #[fail(display = "Invalid character: {}", _0)]
+    InvalidChar(char),
+
+    #[fail(display = "Odd number of hex characters")]
+    InvalidLength,
+
+    #[fail(display = "Invalid checksum")]
+    InvalidChecksum(Vec<u8>),
+}
+
+pub fn try_parse_hex_string(input_string: &str) -> Result<Vec<u8>, ParseHexError> {
     let mut acc = 0u8;
     let mut cnt = 0;
     let mut res = vec![];
@@ -76,14 +125,24 @@ pub fn try_parse_hex_string(input_string: &str) -> Fallible<Vec<u8>> {
                 cnt = 0;
             }
         } else {
-            bail!("Invalid hex character: {}", ch);
+            return Err(ParseHexError::InvalidChar(ch));
         }
     }
 
     if cnt > 0 {
-        bail!("Odd number of hex characters");
+        return Err(ParseHexError::InvalidLength);
     }
     Ok(res)
+}
+
+pub fn try_parse_hex_string_checksummed(input_string: &str) -> Result<Vec<u8>, ParseHexError> {
+    let bytes = try_parse_hex_string(input_string)?;
+    let input_string_without_whitespace = input_string.replace(char::is_whitespace, "");
+    if to_hex_string_checksummed(&bytes) != input_string_without_whitespace {
+        Err(ParseHexError::InvalidChecksum(bytes).into())
+    } else {
+        Ok(bytes)
+    }
 }
 
 #[test]
@@ -93,9 +152,39 @@ fn parse_hex_test() -> Fallible<()> {
     assert_eq!(try_parse_hex_string("")?, b"");
     assert_eq!(try_parse_hex_string("   ")?, b"");
 
-    assert!(try_parse_hex_string("a").is_err());
-    assert!(try_parse_hex_string("aq").is_err());
-    assert!(try_parse_hex_string("3 132 33").is_err());
+    assert_eq!(try_parse_hex_string("a"), Err(ParseHexError::InvalidLength));
+    assert_eq!(
+        try_parse_hex_string("aq"),
+        Err(ParseHexError::InvalidChar('q'))
+    );
+    assert_eq!(
+        try_parse_hex_string("3 132 33"),
+        Err(ParseHexError::InvalidChar(' '))
+    );
+
+    assert_eq!(
+        try_parse_hex_string_checksummed("31323361626378797A")?,
+        b"123abcxyz"
+    );
+    assert_eq!(
+        try_parse_hex_string_checksummed(" 31 32 33 61  62 63 78 79 7A\n")?,
+        b"123abcxyz"
+    );
+    assert_eq!(
+        try_parse_hex_string_checksummed(" 31 32 33 61  62 63 78 79 7a\n"),
+        Err(ParseHexError::InvalidChecksum(b"123abcxyz".to_vec()))
+    );
+    assert_eq!(
+        try_parse_hex_string_checksummed("FfFfffffFFFFFfffFF")?,
+        b"\xff\xff\xff\xff\xff\xff\xff\xff\xff"
+    );
+    assert_eq!(
+        try_parse_hex_string_checksummed("FfFfffffFFFFFfffFf"),
+        Err(ParseHexError::InvalidChecksum(
+            b"\xff\xff\xff\xff\xff\xff\xff\xff\xff".to_vec()
+        ))
+    );
+
     Ok(())
 }
 

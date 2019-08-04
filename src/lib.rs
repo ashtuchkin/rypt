@@ -1,6 +1,8 @@
 #![warn(clippy::all)]
 
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use failure::Fallible;
 
@@ -9,11 +11,10 @@ pub use crate::errors::EarlyTerminationError;
 use crate::header::{decrypt_header, encrypt_header};
 use crate::header_io::{read_header, write_header};
 use crate::io_streams::InputOutputStream;
+use crate::key_management::generate_key_pair_files;
 use crate::progress::ProgressPrinter;
 pub use crate::runtime_env::{Reader, RuntimeEnvironment, Writer};
 use crate::types::StreamConverter;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 pub mod cli;
 mod crypto;
@@ -21,6 +22,7 @@ mod errors;
 mod header;
 mod header_io;
 mod io_streams;
+mod key_management;
 mod progress;
 mod proto;
 mod runtime_env;
@@ -36,7 +38,7 @@ pub const PKG_NAME: &str = env!("CARGO_PKG_NAME");
 fn convert_streams(
     io_streams: Vec<InputOutputStream>,
     verbose: i32,
-    mut stderr: &mut Writer,
+    stderr: &mut Writer,
     terminate_flag: &Arc<AtomicBool>,
     create_converter: &Fn(&mut Read, &mut Write) -> Fallible<(Box<StreamConverter>, usize, usize)>,
 ) -> Fallible<()> {
@@ -46,7 +48,7 @@ fn convert_streams(
             break;
         }
 
-        let mut progress_printer = ProgressPrinter::new(&mut stderr, verbose);
+        let mut progress_printer = ProgressPrinter::new(stderr, verbose);
         progress_printer.print_file_header(&io_stream.input_path(), file_idx, total_files);
 
         let res = io_stream.open_streams().and_then(
@@ -106,6 +108,9 @@ pub fn run(env: &RuntimeEnvironment) -> Fallible<()> {
                 Ok((stream_converter, chunk_size, read_header_bytes))
             },
         ),
+        Command::GenerateKeyPair(opts) => {
+            generate_key_pair_files(opts.paths, opts.verbose, &mut env.stderr.borrow_mut())
+        }
         Command::Help => print_help(&env),
         Command::Version => print_version(&env),
     }

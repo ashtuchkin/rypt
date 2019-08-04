@@ -43,6 +43,13 @@ impl InputStream {
             InputStream::Stdin { reader } => Ok((reader, None)),
         }
     }
+
+    pub fn path(&self) -> &Path {
+        match &self {
+            InputStream::File { path, .. } | InputStream::FileStream { path } => &path,
+            InputStream::Stdin { .. } => "(stdin)".as_ref(),
+        }
+    }
 }
 
 impl std::fmt::Debug for InputStream {
@@ -86,6 +93,13 @@ impl OutputStream {
             OutputStream::Stdout { writer } => Ok(writer),
         }
     }
+
+    pub fn path(&self) -> &Path {
+        match &self {
+            OutputStream::File { path, .. } => &path,
+            OutputStream::Stdout { .. } => "(stdout)".as_ref(),
+        }
+    }
 }
 
 impl std::fmt::Debug for OutputStream {
@@ -107,10 +121,7 @@ pub struct InputOutputStream {
 
 impl InputOutputStream {
     pub fn input_path(&self) -> &Path {
-        match &self.input {
-            InputStream::File { path, .. } | InputStream::FileStream { path } => &path,
-            InputStream::Stdin { .. } => "(stdin)".as_ref(),
-        }
+        self.input.path()
     }
 
     pub fn open_streams(

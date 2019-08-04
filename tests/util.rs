@@ -20,10 +20,14 @@ pub fn random_bytes(rng: &mut rand::RngCore, len: usize) -> Vec<u8> {
     bytes
 }
 
-pub fn create_temp_file(rng: &mut RngCore, extension: &str) -> Fallible<(PathBuf, Vec<u8>)> {
-    let temp_file = env::temp_dir()
+pub fn temp_filename(rng: &mut RngCore, extension: &str) -> PathBuf {
+    env::temp_dir()
         .join(random_str(rng, 10))
-        .with_extension(extension);
+        .with_extension(extension)
+}
+
+pub fn create_temp_file(rng: &mut RngCore, extension: &str) -> Fallible<(PathBuf, Vec<u8>)> {
+    let temp_file = temp_filename(rng, extension);
     let contents = random_bytes(rng, 10_000_000);
     fs::write(&temp_file, &contents)?;
     Ok((temp_file, contents))

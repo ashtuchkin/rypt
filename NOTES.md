@@ -12,17 +12,18 @@ Note, a lot of the information here is stale. Don't rely on it for anything.
       * ?? removes original file on success (Question: wipe the file?; Question: ask user to delete it?; Question: only after all files been encoded?); 
       * removes new file on failure.
    * Skips all the other filetypes (folders, symlinks, char/block devices, sockets), with reference to pipe mode.
- * Pipe mode (-S):
+ * Pipe mode (-s):
    * Only one input is allowed. Output is always to stdout.
    * Input: stdin ("-"), files, named pipes (fifo/process substitution), char devices, potentially through symlinks.
    * Default if stdin is the input (or no files provided).
-   * Bail if input or stdout are terminals.
+   * Bail if encrypted data goes from/to a TTY.
    * Bail if stdin input requested + password interactive mode
- * Ways to provide password/key:
-   * Secret key directly: --secret-key-file=filename  (file must contain 32 bytes binary key)
-   * Password: 1) interactive mode via stdin/stdout, 2) -P, --password-file=filename
-   * Private key / Public key: --recipient-public-key=filename, --my-private-key=filename; 
-     --sender-public-key=filename (on decryption)
+ * Ways to provide passwords/keys:
+   * Password: 1) -p interactive prompt via stdin/stderr, 2) --password-file=filename
+   * Symmetric key: --symmetric-key=filename  (file must contain 32 bytes hex keys, one per line)
+   * Private key / Public key: --public-key=filename,  --private-key=filename
+     --public-key-text=b8604b483a8c215447afacfc82762411df698b76f8539fb74a8b3d48e9ec3f26
+   * Sender private key: --sign-private-key=filename, --repudiable
  * Encrypt a folder and other creative pipe usages:
    `tar c <folder> | xz | rypt -P password.txt | aws s3 cp - s3://mybucket/archive.xz.rypt`
    `rypt -S <(tar c . | xz) > archive.xz.rypt`  # will ask password interactively
@@ -132,7 +133,28 @@ Should be no trailing data
 ## Public/private key encoding
 Looks like base58 (https://docs.rs/bs58) is the most widely used markdown-safe encoding. base62 from saltpack is okayish
 but requires writing custom codec.  
- 
+
+Hex/base16 (64 chars):
+b8604b483a8c215447afacfc82762411df698b76f8539fb74a8b3d48e9ec3f26
+
+base64 (43 chars):
+uGBLSDqMIVRHr6z8gnYkEd9pi3b4U5+3Sos9SOnsPyY
+
+base62 (43 chars):
+hiiXIt98RAEEgNgwYxlKMdDpTH2iisR6qaPYOcpTbbK
+
+base58 (44 chars):
+DQjBQLprbJdxA6sUkSSWWGN6TVBHgLXP5a967fZtTdnd
+
+Would be nice to be: 
+ * As simple as possible
+ * Be markdown and copy/paste compatible (so that it's easy to publish)
+ * Protected against typos (checksum?) we can use mixed-case checksum https://github.com/ethereum/EIPs/blob/master/EIPS/eip-55.md
+   in our case: hex(hash(data)), then uppercase each char where hex char >=8
+ * Easily identified ("vanity" prefix)?
+
+It's nice that in Ed25519 private key contains public key, so they can be matched manually.
+
 
 ## Shamir secret sharing
 Looks like a basic Shamir scheme over Gf(256) is the most straightforward. We'll use standard polynomial (same as in 

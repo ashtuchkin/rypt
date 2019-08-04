@@ -1,23 +1,15 @@
 # P0
- * Remove output file on error.
- * Support Public Key derivation:
-    * Command line arguments providing receiver public key (required) and my private key (optional)
-       * Plus, a command line mode to generate private/public key pair.
-    * Encryption: 
-       * If only receiver public key given, use 'seal' construct, else regular box construct.
-       * If using regular box construct, store sender's public key unless `--no-store-my-public-key` is given. 
-    * Decryption:
-       * Just my private key is required, unless we skipped storing sender public key.
- * Finalize basic command line usage: '-e, --encrypt', '-d, decrypt' 
-    * If encrypt/decrypt successful, replace file 
+ * CLI: Create consistent verbose/quiet rules
+ * Input/output file management:
     *   copy attributes from the replaced file (owner, group, perms, access/mod times)
-    * If target file already exists, error and skip.
-    * Warning and skip if: symlink; already has extension, doesn't have supported ext
-    * delete the output file on error or if interrupted (ctrl-c)
-    * '-k, --keep' - keep the original file
+    * Warning and skip if: symlink, non-file, multiple hardlinks
     * '-f' - overwrite the destination file
+ * Tests
+    * If target file already exists, error and skip.
+    * delete the output file on error or if interrupted (ctrl-c)
+    * warning and skip if already has extension, doesn't have supported ext
+    * '-k, --keep' - keep the original file
     * '-c, --stdout, --to-stdout' - write to stdout; implies -k
- * Errors: tell which chunk failed.
  * Create a readme
  * Publish to /r/rust, hacker news.
  * Review how OpenGPG allows several ways to decrypt, including both several public key recipients and a password
@@ -29,8 +21,9 @@
    * Keybase has its own payload format: saltpack https://saltpack.org/encryption-format-v2
  
 # P1
- * Show whether AES256 is supported on this platform.
- * Add external authenticated data + ability to get it, with or without password.
+ * Sender signature and repudiable verification
+ * Show whether AES256 is supported on this platform in --version command.
+ * Add non-encrypted authenticated data + ability to get it, with or without password.
  * Review how we keep secret keys in memory and clean it up (see sodium_mlock/sodium_munlock and sodium_memzero)
    * E.g. maybe use crypto_aead_aes256gcm_beforenm to create state from key and then forget it?
      https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/aes-256-gcm/aes-gcm_with_precomputation
@@ -44,6 +37,7 @@
 
 # P2
  * Write a blog post about pipelining and compare it to a naive serial solution.
+ * Errors: tell which chunk failed.
  * Adjustable chunk size (via command line args)
  * Initially write to an invisible tempfile in the same directory (using either tempfile crate or O_TMPFILE), then
    atomically make it visible.

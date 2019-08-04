@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use failure::Fallible;
 use getopts::Matches;
 
@@ -5,12 +7,14 @@ use crate::cli::credentials::get_credentials;
 pub use crate::cli::credentials::Credential;
 pub use crate::cli::help::{print_help, print_version};
 use crate::cli::io_streams::get_input_output_streams;
-use crate::io_streams::InputOutputStream;
+use crate::cli::key_management::get_keypair_paths;
+use crate::io_streams::{InputOutputStream, OutputStream};
 use crate::runtime_env::RuntimeEnvironment;
 
 mod credentials;
 mod help;
 mod io_streams;
+mod key_management;
 
 pub const DEFAULT_FILE_SUFFIX: &str = "rypt";
 
@@ -28,9 +32,23 @@ pub struct DecryptOptions {
     pub verbose: i32,
 }
 
+#[derive(Debug)]
+pub struct KeyPairPaths {
+    pub public_key_path: Option<PathBuf>,
+    pub private_key_path: OutputStream,
+}
+
+#[derive(Debug)]
+pub struct GenerateKeyPairOptions {
+    pub paths: Vec<KeyPairPaths>,
+    pub verbose: i32,
+}
+
+#[derive(Debug)]
 pub enum Command {
     Encrypt(Vec<InputOutputStream>, EncryptOptions),
     Decrypt(Vec<InputOutputStream>, DecryptOptions),
+    GenerateKeyPair(GenerateKeyPairOptions),
     Help,
     Version,
 }
@@ -42,8 +60,9 @@ fn define_options() -> getopts::Options {
     options
         .optflag("e", "encrypt", "encrypt files (default)")
         .optflag("d", "decrypt", "decrypt files")
-        .optflag("h", "help", "display this short help and exit")
-        .optflag("V", "version", "display version numbers and exit");
+        .optflag("g", "generate-keypair", "generate public/private key pair")
+        .optflag("h", "help", "display this short help")
+        .optflag("V", "version", "display version");
 
     // Common flags
     options
@@ -70,8 +89,26 @@ fn define_options() -> getopts::Options {
         )
         .optmulti(
             "",
-            "symmetric-key-file",
+            "symmetric-key",
             "read 32-byte hex symmetric secret key(s) from the file, one per line",
+            "FILENAME",
+        )
+        .optmulti(
+            "",
+            "public-key",
+            "read public key(s) from the file, one per line",
+            "FILENAME",
+        )
+        .optmulti(
+            "",
+            "public-key-text",
+            "provide public key (64 hex chars) as a command line argument",
+            "PUBLIC_KEY",
+        )
+        .optmulti(
+            "",
+            "private-key",
+            "read private key(s) from the file, one per line",
             "FILENAME",
         );
 
@@ -92,6 +129,11 @@ fn define_options() -> getopts::Options {
             "stdout",
             "write to standard output; implies -k",
         )
+        .optflag(
+            "",
+            "skip-checksum-check",
+            "don't check public keys for validity",
+        )
         .optopt(
             "S",
             "suffix",
@@ -108,13 +150,15 @@ fn define_options() -> getopts::Options {
 enum OperationMode {
     Encrypt,
     Decrypt,
+    GenerateKeypair,
     Help,
     Version,
 }
 
-const MODES: &[(&str, OperationMode); 4] = &[
+const MODES: &[(&str, OperationMode)] = &[
     ("e", OperationMode::Encrypt),
     ("d", OperationMode::Decrypt),
+    ("g", OperationMode::GenerateKeypair),
     ("h", OperationMode::Help),
     ("V", OperationMode::Version),
 ];
@@ -143,12 +187,13 @@ pub fn parse_command_line(env: &RuntimeEnvironment) -> Fallible<Command> {
     let options = define_options();
     let matches = options.parse(&env.cmdline_args)?;
     let verbose = matches.opt_count("v") as i32 - matches.opt_count("q") as i32;
+    let skip_checksum = matches.opt_present("skip-checksum-check");
 
     // Figure out the mode: use the last mode argument, or Help/Encrypt by default.
     Ok(match get_mode(&matches, env.cmdline_args.is_empty()) {
         OperationMode::Encrypt => {
             let streams = get_input_output_streams(&matches, &env, verbose, true)?;
-            let credentials = get_credentials(&matches, &env, true)?;
+            let credentials = get_credentials(&matches, &env, true, skip_checksum)?;
             let options = EncryptOptions {
                 credentials,
                 fast_aead_algorithm: matches.opt_present("fast"),
@@ -159,12 +204,16 @@ pub fn parse_command_line(env: &RuntimeEnvironment) -> Fallible<Command> {
         }
         OperationMode::Decrypt => {
             let streams = get_input_output_streams(&matches, &env, verbose, false)?;
-            let credentials = get_credentials(&matches, &env, false)?;
+            let credentials = get_credentials(&matches, &env, false, skip_checksum)?;
             let options = DecryptOptions {
                 credentials,
                 verbose,
             };
             Command::Decrypt(streams, options)
+        }
+        OperationMode::GenerateKeypair => {
+            let paths = get_keypair_paths(&matches, &env)?;
+            Command::GenerateKeyPair(GenerateKeyPairOptions { paths, verbose })
         }
         OperationMode::Help => Command::Help,
         OperationMode::Version => Command::Version,

@@ -41,7 +41,7 @@ fn simple_file_encrypt_decrypt(
     let secret_key_file_path = secret_key_file.path().to_str().unwrap();
 
     let args = &[
-        "--symmetric-key-file",
+        "--symmetric-key",
         secret_key_file_path,
         "-q",
         temp_file_path.to_str().unwrap(),
@@ -56,7 +56,7 @@ fn simple_file_encrypt_decrypt(
 
     let output = util::main_cmd(&[
         "-d",
-        "--symmetric-key-file",
+        "--symmetric-key",
         secret_key_file_path,
         "-q",
         temp_file_path_enc.to_str().unwrap(),
@@ -114,6 +114,60 @@ fn encrypt_decrypt_stdio() -> Fallible<()> {
     assert_eq!(std::str::from_utf8(&output.stderr)?, "");
     assert!(output.status.success());
     assert_eq!(output.stdout, plaintext);
+
+    Ok(())
+}
+
+#[test]
+fn public_key_file_encrypt_decrypt() -> Fallible<()> {
+    let rng = &mut thread_rng();
+
+    // 1. Generate public/private key pair
+    let private_key_path = util::temp_filename(rng, "key");
+    let public_key_path = private_key_path.with_extension("pub");
+    let output = util::main_cmd(&["-g", private_key_path.to_str().unwrap()])?.output()?;
+    assert_eq!(std::str::from_utf8(&output.stdout)?, "");
+    assert_eq!(std::str::from_utf8(&output.stderr)?, "");
+    assert!(output.status.success());
+
+    assert!(private_key_path.exists());
+    assert!(public_key_path.exists());
+
+    // 2. Generate a file to encrypt
+    let (temp_file_path, contents) = util::create_temp_file(rng, "")?;
+    let temp_file_path_enc = temp_file_path.with_extension(DEFAULT_FILE_SUFFIX.to_string());
+
+    // 3. Encrypt the file using public key
+    let output = util::main_cmd(&[
+        "--public-key",
+        public_key_path.to_str().unwrap(),
+        "-q",
+        temp_file_path.to_str().unwrap(),
+    ])?
+    .output()?;
+    assert_eq!(std::str::from_utf8(&output.stdout)?, "");
+    assert_eq!(std::str::from_utf8(&output.stderr)?, "");
+    assert!(output.status.success());
+
+    assert!(temp_file_path_enc.exists());
+    assert!(!temp_file_path.exists()); // Original file should be removed.
+
+    // 3. Decrypt the file using private key
+    let output = util::main_cmd(&[
+        "-d",
+        "--private-key",
+        private_key_path.to_str().unwrap(),
+        "-q",
+        temp_file_path_enc.to_str().unwrap(),
+    ])?
+    .output()?;
+    assert_eq!(std::str::from_utf8(&output.stdout)?, "");
+    assert_eq!(std::str::from_utf8(&output.stderr)?, "");
+    assert!(output.status.success());
+
+    let decoded_contents = fs::read(temp_file_path)?;
+    assert_eq!(decoded_contents, contents);
+    assert!(!temp_file_path_enc.exists()); // Encrypted file should be removed.
 
     Ok(())
 }
