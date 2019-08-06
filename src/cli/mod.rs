@@ -22,6 +22,7 @@ pub const DEFAULT_FILE_SUFFIX: &str = "rypt";
 pub struct EncryptOptions {
     pub credentials: Vec<Credential>,
     pub fast_aead_algorithm: bool,
+    pub key_threshold: Option<usize>,
     pub associated_data: Vec<u8>,
     pub verbose: i32,
 }
@@ -135,6 +136,9 @@ fn define_options() -> getopts::Options {
             "don't check public keys for validity",
         )
         .optopt(
+            "", "threshold", "Number of keys required to decrypt the file", "NUM_KEYS"
+        )
+        .optopt(
             "S",
             "suffix",
             &format!(
@@ -198,6 +202,7 @@ pub fn parse_command_line(env: &RuntimeEnvironment) -> Fallible<Command> {
                 credentials,
                 fast_aead_algorithm: matches.opt_present("fast"),
                 associated_data: vec![],
+                key_threshold: matches.opt_get("threshold")?,
                 verbose,
             };
             Command::Encrypt(streams, options)

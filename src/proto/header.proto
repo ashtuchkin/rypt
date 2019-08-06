@@ -29,7 +29,7 @@ message FileHeader {
     bytes associated_data = 11;
 
     // Shamir Secret Sharing threshold - number of keys needed to decrypt this file.
-    //uint64 key_threshold = 7;
+    uint64 key_threshold = 7;
 
     // Length in bytes of plaintext 'chunks' that we're encrypting and authenticating in order. The source file/stream
     // has to be split into chunks to avoid having to read all the contents into memory. All chunks have the same
@@ -63,12 +63,6 @@ message LibsodiumCryptoFamily {
         // Potentially HMAC for non-encrypted but signed files.
     }
     AEADAlgorithm aead_algorithm = 1;
-}
-
-message RecipientPayload {
-    bytes payload_key = 1;
-    //repeated bytes secret_shares = 2;
-    //fixed32 repudiable_auth_idx = 3;
 }
 
 message Recipient {

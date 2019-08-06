@@ -19,6 +19,9 @@ pub struct FileHeader {
     /// the file. Optional.
     #[prost(bytes, tag="11")]
     pub associated_data: std::vec::Vec<u8>,
+    /// Shamir Secret Sharing threshold - number of keys needed to decrypt this file.
+    #[prost(uint64, tag="7")]
+    pub key_threshold: u64,
     /// Which crypto algorithms to use and corresponding config. Required.
     #[prost(oneof="file_header::CryptoFamily", tags="2")]
     pub crypto_family: ::std::option::Option<file_header::CryptoFamily>,
@@ -46,13 +49,6 @@ pub mod libsodium_crypto_family {
         /// Potentially HMAC for non-encrypted but signed files.
         Aes256gcm = 2,
     }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RecipientPayload {
-    ///repeated bytes secret_shares = 2;
-    ///fixed32 repudiable_auth_idx = 3;
-    #[prost(bytes, tag="1")]
-    pub payload_key: std::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Recipient {

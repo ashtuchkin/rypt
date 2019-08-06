@@ -1,7 +1,8 @@
 # P0
  * CLI: Create consistent verbose/quiet rules
  * CLI: Polish help and messages
- * Shamir's secret sharing with threshold
+ * CLI: Exit code should signify error if at least one file fails.
+ * Don't accept empty password.
  * Input/output file management:
     *   copy attributes from the replaced file (owner, group, perms, access/mod times)
     * Warning and skip if: symlink, non-file, multiple hardlinks
@@ -23,6 +24,7 @@
    * Keybase has its own payload format: saltpack https://saltpack.org/encryption-format-v2
  
 # P1
+ * Weak password warning
  * Sender signature and repudiable verification
  * Show whether AES256 is supported on this platform in --version command.
  * Add non-encrypted authenticated data + ability to get it, with or without password.

@@ -98,7 +98,7 @@ pub fn create_secret_shares<R: rand::Rng + rand::CryptoRng>(
 
 /// Recover the secret from the shares. For each share, its original index is required.
 pub fn recover_secret(
-    shares: &[(usize, &[u8])], // items are (share_idx, share)
+    shares: &[(usize, impl AsRef<[u8]>)], // items are (share_idx, share)
     threshold: usize,
 ) -> Result<Vec<u8>, SecretShareError> {
     if threshold <= 0 {
@@ -106,10 +106,10 @@ pub fn recover_secret(
     }
 
     // Check all shares have different indices
-    let mut shares_dedup = shares.to_vec();
-    shares_dedup.sort_by_key(|&(i, _)| i);
-    shares_dedup.dedup_by_key(|&mut (i, _)| i);
-    if shares_dedup.len() != shares.len() {
+    let mut share_indices = shares.iter().map(|&(i, _)| i).collect::<Vec<_>>();
+    share_indices.sort();
+    share_indices.dedup();
+    if share_indices.len() != shares.len() {
         return Err(SecretShareError::SharesWithSameIndices);
     }
 
@@ -122,26 +122,26 @@ pub fn recover_secret(
         });
     }
 
-    // Calculate the length of the secret and check the shares are the same length.
-    let secret_len = shares[0].1.len();
-    if shares.iter().any(|(_, s)| s.len() != secret_len) {
-        return Err(SecretShareError::DifferentLengthShares);
-    }
-
     // Create a view of shares and share indices in Gf256 field
     // Only take the first `threshold` number of shares.
     let shares: Vec<(Gf256, &[Gf256])> = shares[..threshold]
         .iter()
-        .map(|&(idx, share)| {
+        .map(|(idx, share)| {
             let idx = (idx + 1)
                 .try_into()
                 .map_err(|_| SecretShareError::ShareIndexTooLarge {
-                    idx,
+                    idx: *idx,
                     max_idx: MAX_SHARES,
                 })?;
-            Ok((Gf256(idx), Gf256::as_slice(share)))
+            Ok((Gf256(idx), Gf256::as_slice(share.as_ref())))
         })
         .collect::<Result<Vec<_>, _>>()?;
+
+    // Calculate the length of the secret and check the shares are the same length.
+    let secret_len = shares[0].1.len();
+    if shares.iter().any(|&(_, s)| s.len() != secret_len) {
+        return Err(SecretShareError::DifferentLengthShares);
+    }
 
     // Calculate the secret.
     let mut secret = vec![0u8; secret_len];
@@ -179,7 +179,7 @@ mod tests {
             for (j, share2) in shares.iter().enumerate() {
                 for (k, share3) in shares.iter().enumerate() {
                     if i != j && j != k && i != k {
-                        let shares = &[(i, share1.as_slice()), (j, &share2), (k, &share3)];
+                        let shares = &[(i, share1), (j, share2), (k, share3)];
                         assert_eq!(recover_secret(shares, threshold)?, secret);
                     }
                 }
@@ -189,14 +189,7 @@ mod tests {
         let shares = create_secret_shares(secret, 1, 1, &mut rng)?;
         assert_eq!(&shares[0][..secret.len()], secret); // 1 share/1 threshold just keeps the secret in the open.
         assert_eq!(
-            recover_secret(
-                &shares
-                    .iter()
-                    .map(|v| v.as_slice())
-                    .enumerate()
-                    .collect::<Vec<_>>(),
-                1
-            )?,
+            recover_secret(&shares.iter().enumerate().collect::<Vec<_>>(), 1)?,
             secret
         );
 
@@ -205,14 +198,7 @@ mod tests {
 
         let shares = create_secret_shares(secret, 3, 3, &mut rng)?;
         assert_eq!(
-            recover_secret(
-                &shares
-                    .iter()
-                    .map(|v| v.as_slice())
-                    .enumerate()
-                    .collect::<Vec<_>>(),
-                3
-            )?,
+            recover_secret(&shares.iter().enumerate().collect::<Vec<_>>(), 3)?,
             secret
         );
 

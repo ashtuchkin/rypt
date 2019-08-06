@@ -1,7 +1,6 @@
 use failure::Fallible;
 use rand::{thread_rng, RngCore};
 use rypt::cli::DEFAULT_FILE_SUFFIX;
-use rypt::util::to_hex_string;
 use std::fs;
 use std::io::Write;
 use util::CommandExt;
@@ -32,7 +31,7 @@ fn simple_file_encrypt_decrypt(
         format!("{}.{}", extension, DEFAULT_FILE_SUFFIX)
     };
     let temp_file_path_enc = temp_file_path.with_extension(ext);
-    let secret_key = to_hex_string(util::random_bytes(rng, 32));
+    let secret_key = util::to_hex_string(util::random_bytes(rng, 32));
     dbg!(&temp_file_path);
     dbg!(&temp_file_path_enc);
     dbg!(&secret_key);
@@ -157,6 +156,77 @@ fn public_key_file_encrypt_decrypt() -> Fallible<()> {
         "-d",
         "--private-key",
         private_key_path.to_str().unwrap(),
+        "-q",
+        temp_file_path_enc.to_str().unwrap(),
+    ])?
+    .output()?;
+    assert_eq!(std::str::from_utf8(&output.stdout)?, "");
+    assert_eq!(std::str::from_utf8(&output.stderr)?, "");
+    assert!(output.status.success());
+
+    let decoded_contents = fs::read(temp_file_path)?;
+    assert_eq!(decoded_contents, contents);
+    assert!(!temp_file_path_enc.exists()); // Encrypted file should be removed.
+
+    Ok(())
+}
+
+#[test]
+fn threshold_encrypt_decrypt() -> Fallible<()> {
+    let rng = &mut thread_rng();
+
+    // 1. Generate 5 password files
+    let mut password_paths = vec![];
+    for _ in 0..5 {
+        let path = util::temp_filename(rng, "password");
+        let password = util::to_hex_string(util::random_bytes(rng, 16));
+        fs::write(&path, password)?;
+        password_paths.push(path);
+    }
+
+    // 2. Generate a file to encrypt
+    let (temp_file_path, contents) = util::create_temp_file(rng, "")?;
+    let temp_file_path_enc = temp_file_path.with_extension(DEFAULT_FILE_SUFFIX.to_string());
+
+    // 3. Encrypt the file using 5 passwords with 3 password threshold
+    let mut args = vec!["--threshold", "3", "-q", temp_file_path.to_str().unwrap()];
+    for password_path in &password_paths {
+        args.push("--password-file");
+        args.push(password_path.to_str().unwrap());
+    }
+    let output = util::main_cmd(args)?.output()?;
+    assert_eq!(std::str::from_utf8(&output.stdout)?, "");
+    assert_eq!(std::str::from_utf8(&output.stderr)?, "");
+    assert!(output.status.success());
+
+    assert!(temp_file_path_enc.exists());
+    assert!(!temp_file_path.exists()); // Original file should be removed.
+
+    // 3. Try to decrypt the file using just 2 passwords - should fail
+    let output = util::main_cmd(&[
+        "-d",
+        "--password-file",
+        password_paths[2].to_str().unwrap(),
+        "--password-file",
+        password_paths[4].to_str().unwrap(),
+        "-q",
+        temp_file_path_enc.to_str().unwrap(),
+    ])?
+    .output()?;
+    assert_eq!(std::str::from_utf8(&output.stdout)?, "");
+    assert!(std::str::from_utf8(&output.stderr)?
+        .contains("Not enough shares to reconstruct the secret"));
+    //assert!(!output.status.success());   // TODO.
+
+    // 4. Decrypt the file using 3 passwords - should succeed
+    let output = util::main_cmd(&[
+        "-d",
+        "--password-file",
+        password_paths[2].to_str().unwrap(),
+        "--password-file",
+        password_paths[4].to_str().unwrap(),
+        "--password-file",
+        password_paths[0].to_str().unwrap(),
         "-q",
         temp_file_path_enc.to_str().unwrap(),
     ])?

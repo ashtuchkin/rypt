@@ -1,6 +1,7 @@
 use failure::{bail, Fallible};
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
+pub use rypt::util::to_hex_string;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;

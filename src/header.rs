@@ -6,13 +6,15 @@ use prost::Message;
 
 use crate::cli::{Credential, DecryptOptions, EncryptOptions};
 use crate::crypto::{
-    instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, BoxNonce, CryptoSystem, HMacKey,
-    KdfSalt, PrivateKey, PublicKey, AEAD_NONCE_LEN, BOX_NONCE_LEN, KDF_SALT_LEN,
+    instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, BoxNonce, CryptoSystem,
+    CryptoSystemRng, HMacKey, KdfSalt, PrivateKey, PublicKey, AEAD_NONCE_LEN, BOX_NONCE_LEN,
+    KDF_SALT_LEN,
 };
 use crate::proto::rypt::{
     file_header::CryptoFamily, libsodium_crypto_family::AeadAlgorithm, EncryptedHeader, FileHeader,
-    FormatVersion, LibsodiumCryptoFamily, Recipient, RecipientPayload, SenderAuthType,
+    FormatVersion, LibsodiumCryptoFamily, Recipient, SenderAuthType,
 };
+use crate::shamir;
 use crate::stream_crypto::CryptoSystemAEADCodec;
 use crate::types::StreamConverter;
 use crate::util::serialize_proto;
@@ -89,11 +91,10 @@ fn encrypt_payload_for_recipient(
     cryptosys: &CryptoSystem,
     ephemeral_pk: &PublicKey,
     ephemeral_sk: &PrivateKey,
-    recipient_payload: &RecipientPayload,
+    recipient_payload: &[u8],
     recipient_idx: usize,
     credential: &Credential,
 ) -> Recipient {
-    let recipient_payload = serialize_proto(recipient_payload).unwrap();
     let encrypted_payload = match credential {
         Credential::Password(_) | Credential::SymmetricKey(_) => {
             let secret_key = recipient_secret_key(&*cryptosys, &ephemeral_pk, credential);
@@ -119,6 +120,7 @@ pub fn encrypt_header(opts: &EncryptOptions) -> Fallible<(Vec<u8>, Box<StreamCon
 
     let crypto_family = cryptofamily_from_opts(&opts);
     let cryptosys = cryptosys_from_proto(&crypto_family)?;
+    let key_threshold = opts.key_threshold.unwrap_or_default();
 
     let chunk_size = DEFAULT_CHUNK_SIZE;
     ensure!(
@@ -145,14 +147,24 @@ pub fn encrypt_header(opts: &EncryptOptions) -> Fallible<(Vec<u8>, Box<StreamCon
     );
 
     // Recipients
-    let recipient_payload = RecipientPayload {
-        payload_key: payload_key.to_vec(),
+    let num_creds = opts.credentials.len();
+    let recipient_payloads: Vec<Vec<u8>> = if key_threshold > 1 {
+        shamir::create_secret_shares(
+            &*payload_key,
+            num_creds,
+            key_threshold,
+            &mut CryptoSystemRng::new(&*cryptosys),
+        )?
+    } else {
+        vec![payload_key.to_vec(); num_creds]
     };
+
     let recipients = opts
         .credentials
         .iter()
+        .zip(recipient_payloads)
         .enumerate()
-        .map(|(recipient_idx, credential)| {
+        .map(|(recipient_idx, (credential, recipient_payload))| {
             encrypt_payload_for_recipient(
                 &*cryptosys,
                 &ephemeral_pk,
@@ -172,6 +184,7 @@ pub fn encrypt_header(opts: &EncryptOptions) -> Fallible<(Vec<u8>, Box<StreamCon
         recipients,
         encrypted_header_data,
         associated_data: opts.associated_data.clone(),
+        key_threshold: key_threshold as u64,
     };
     let serialized_header = serialize_proto(&header)?;
     let header_hash = cryptosys.hash(&serialized_header);
@@ -191,7 +204,7 @@ fn decrypt_payload_for_recipient(
     ephemeral_pk: &PublicKey,
     encrypted_recipients: &[Recipient],
     credential: &Credential,
-) -> Option<RecipientPayload> {
+) -> Vec<(usize, Vec<u8>)> {
     // Compute secret key for each credential only once, as it can be slow to derive it from password.
     let secret_key = match credential {
         Credential::Password(_) | Credential::SymmetricKey(_) => {
@@ -203,11 +216,12 @@ fn decrypt_payload_for_recipient(
     encrypted_recipients
         .iter()
         .enumerate()
-        .find_map(|(recipient_idx, recipient)| match credential {
+        .filter_map(|(recipient_idx, recipient)| match credential {
             Credential::Password(_) | Credential::SymmetricKey(_) => {
                 let nonce = recipient_secret_nonce(recipient_idx);
                 cryptosys
                     .aead_decrypt_easy(&recipient.encrypted_payload, &secret_key, &nonce)
+                    .map(|secret| (recipient_idx, secret))
                     .ok()
             }
             Credential::PublicKey(_) => {
@@ -222,10 +236,11 @@ fn decrypt_payload_for_recipient(
                         private_key,
                         &nonce,
                     )
+                    .map(|secret| (recipient_idx, secret))
                     .ok()
             }
         })
-        .and_then(|buf| RecipientPayload::decode(buf).ok())
+        .collect()
 }
 
 pub fn decrypt_header(
@@ -242,11 +257,12 @@ pub fn decrypt_header(
 
     let cryptosys = cryptosys_from_proto(&header.crypto_family)?;
     let ephemeral_pk: PublicKey = header.ephemeral_pk.as_slice().try_into()?;
+    let key_threshold = header.key_threshold as usize;
 
     let recipient_payloads = opts
         .credentials
         .iter()
-        .filter_map(|credential| {
+        .flat_map(|credential| {
             decrypt_payload_for_recipient(
                 &*cryptosys,
                 &ephemeral_pk,
@@ -256,10 +272,17 @@ pub fn decrypt_header(
         })
         .collect::<Vec<_>>();
 
-    let recipient_payload = recipient_payloads
-        .first()
-        .ok_or_else(|| err_msg("Invalid credentials"))?;
-    let payload_key: AEADKey = recipient_payload.payload_key.as_slice().try_into()?;
+    let payload_key = if key_threshold > 1 {
+        shamir::recover_secret(&recipient_payloads, key_threshold)?
+    } else {
+        recipient_payloads
+            .into_iter()
+            .next()
+            .ok_or_else(|| err_msg("Invalid credentials"))?
+            .1
+    };
+
+    let payload_key: AEADKey = payload_key.as_slice().try_into()?;
 
     let encrypted_header_buf = cryptosys.aead_decrypt_easy(
         &header.encrypted_header_data,
