@@ -236,6 +236,16 @@ impl CryptoSystem for LibSodiumCryptoSystem {
         }
     }
 
+    fn generate_keypair(&self) -> (Box<PublicKey>, Box<PrivateKey>) {
+        let mut public_key = Box::new([0u8; crypto_sign_PUBLICKEYBYTES as usize]);
+        let mut private_key = Box::new([0u8; crypto_sign_SECRETKEYBYTES as usize]);
+
+        unsafe {
+            crypto_sign_keypair(public_key.as_mut_ptr(), private_key.as_mut_ptr());
+        }
+        (public_key, private_key)
+    }
+
     // Encrypt/decrypt in-place, in `message` argument; fills out `mac`
     fn box_encrypt(
         &self,
@@ -294,16 +304,6 @@ impl CryptoSystem for LibSodiumCryptoSystem {
             return Err(CryptoError::InvalidCiphertext);
         }
         Ok(())
-    }
-
-    fn generate_keypair(&self) -> (Box<PublicKey>, Box<PrivateKey>) {
-        let mut public_key = Box::new([0u8; crypto_sign_PUBLICKEYBYTES as usize]);
-        let mut private_key = Box::new([0u8; crypto_sign_SECRETKEYBYTES as usize]);
-
-        unsafe {
-            crypto_sign_keypair(public_key.as_mut_ptr(), private_key.as_mut_ptr());
-        }
-        (public_key, private_key)
     }
 
     fn sign(&self, message: &[u8], private_key: &PrivateKey, signature: &mut Signature) {
