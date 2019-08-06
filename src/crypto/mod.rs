@@ -1,9 +1,11 @@
 pub use crate::crypto::libsodium::AEADAlgorithm;
 use crate::crypto::libsodium::LibSodiumCryptoSystem;
+pub use crate::crypto::rng::CryptoSystemRng;
 use failure::Fail;
 use std::convert::TryInto;
 
 mod libsodium;
+mod rng;
 
 /// CryptoSystem is a set of cryptographical primitives we use in Rypt to provide authenticated
 /// encryption using either passwords, or public/private keys. All functions work with fixed-size
@@ -140,6 +142,8 @@ pub trait CryptoSystem: Send {
     ) -> Result<(), CryptoError>;
 
     fn key_derivation(&self, password: &str, salt: &KdfSalt) -> Box<KdfOutput>;
+
+    fn fill_random_bytes(&self, dest: &mut [u8]);
 
     // ====  Helper functions based on the primitives above  =======================================
 

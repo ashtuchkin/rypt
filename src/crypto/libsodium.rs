@@ -19,7 +19,7 @@ use libsodium_sys::{
     crypto_pwhash_OPSLIMIT_INTERACTIVE, crypto_pwhash_SALTBYTES, crypto_sign_BYTES,
     crypto_sign_PUBLICKEYBYTES, crypto_sign_SECRETKEYBYTES, crypto_sign_detached,
     crypto_sign_ed25519_pk_to_curve25519, crypto_sign_ed25519_sk_to_curve25519,
-    crypto_sign_keypair, crypto_sign_verify_detached, sodium_init, sodium_memzero,
+    crypto_sign_keypair, crypto_sign_verify_detached, randombytes_buf, sodium_init, sodium_memzero,
 };
 use static_assertions::assert_eq_size;
 use std::convert::TryFrom;
@@ -361,6 +361,10 @@ impl CryptoSystem for LibSodiumCryptoSystem {
         assert_eq!(res, 0);
         output
     }
+
+    fn fill_random_bytes(&self, dest: &mut [u8]) {
+        unsafe { randombytes_buf(dest.as_mut_ptr() as *mut std::ffi::c_void, dest.len()) }
+    }
 }
 
 type BoxBeforeNMKey = [u8; crypto_box_BEFORENMBYTES as usize];
@@ -420,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_hash_hmac() -> Fallible<()> {
-        let cryptosys = LibSodiumCryptoSystem::new(AEADAlgorithm::ChaCha20Poly1305Ietf)?;
+        let cryptosys = LibSodiumCryptoSystem::new(Default::default())?;
 
         // Test vectors for SHA512 hash (first 32 bytes)
         assert_eq!(
@@ -560,7 +564,7 @@ mod tests {
 
     #[test]
     fn test_box() -> Fallible<()> {
-        let cryptosys = LibSodiumCryptoSystem::new(AEADAlgorithm::ChaCha20Poly1305Ietf)?;
+        let cryptosys = LibSodiumCryptoSystem::new(Default::default())?;
 
         let (alice_pk, alice_sk) = cryptosys.generate_keypair();
         let (bob_pk, bob_sk) = cryptosys.generate_keypair();
@@ -610,7 +614,7 @@ mod tests {
 
     #[test]
     fn test_box_easy() -> Fallible<()> {
-        let cryptosys = LibSodiumCryptoSystem::new(AEADAlgorithm::ChaCha20Poly1305Ietf)?;
+        let cryptosys = LibSodiumCryptoSystem::new(Default::default())?;
 
         let (alice_pk, alice_sk) = cryptosys.generate_keypair();
         let (bob_pk, bob_sk) = cryptosys.generate_keypair();
@@ -634,7 +638,7 @@ mod tests {
 
     #[test]
     fn test_signatures() -> Fallible<()> {
-        let cryptosys = LibSodiumCryptoSystem::new(AEADAlgorithm::ChaCha20Poly1305Ietf)?;
+        let cryptosys = LibSodiumCryptoSystem::new(Default::default())?;
 
         let (alice_pk, alice_sk) = cryptosys.generate_keypair();
 
@@ -655,12 +659,23 @@ mod tests {
 
     #[test]
     fn test_key_derivation() -> Fallible<()> {
-        let cryptosys = LibSodiumCryptoSystem::new(AEADAlgorithm::ChaCha20Poly1305Ietf)?;
+        let cryptosys = LibSodiumCryptoSystem::new(Default::default())?;
 
         let salt = b"kdfsalt\0\0\0\0\0\0\0\0\0";
         let secret_key = cryptosys.key_derivation("password", &salt);
 
         assert_ne!(*secret_key, KdfOutput::default());
+        Ok(())
+    }
+
+    #[test]
+    fn test_random() -> Fallible<()> {
+        let cryptosys = LibSodiumCryptoSystem::new(Default::default())?;
+
+        let mut bytes = [0u8; 16];
+        cryptosys.fill_random_bytes(&mut bytes);
+        assert_ne!(&bytes, &[0u8; 16]);
+
         Ok(())
     }
 }
