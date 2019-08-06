@@ -7,6 +7,7 @@ use crate::shamir::gf256::Gf256;
 use std::convert::TryInto;
 
 mod gf256;
+mod gf2_n;
 
 #[derive(Debug, Fail)]
 pub enum SecretShareError {
