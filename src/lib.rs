@@ -1,4 +1,5 @@
 #![warn(clippy::all)]
+#![allow(dead_code)]
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +27,7 @@ mod key_management;
 mod progress;
 mod proto;
 mod runtime_env;
+mod shamir;
 mod stream_crypto;
 mod stream_pipeline;
 mod types;
