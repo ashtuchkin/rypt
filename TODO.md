@@ -1,5 +1,7 @@
 # P0
  * CLI: Create consistent verbose/quiet rules
+ * CLI: Polish help and messages
+ * Shamir's secret sharing with threshold
  * Input/output file management:
     *   copy attributes from the replaced file (owner, group, perms, access/mod times)
     * Warning and skip if: symlink, non-file, multiple hardlinks
@@ -64,4 +66,11 @@
    Signcryption only makes sense if the recipient password/public key is shared; in this case any recipient that owns
    a shared key can create a repudiable/anonymous message like it's from the sender. In this case authentication becomes
    meaningless, only signing the message makes sense.
-   
+
+# Code improvement
+ * Have stderr & verbose as a single concept to pass around, maybe logging?
+ * Move cleanup functions to InputStream/OutputStream and then apply them both.
+ * Rename header.rs to something more appropriate (credentials?)
+ * Unit Tests!
+ * Kill types.rs and move its contents probably to stream_pipeline
+ * Move add_extension and remove_extension to utils and use them in tests and key generation.

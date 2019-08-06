@@ -15,20 +15,6 @@ pub fn human_file_size(val: usize) -> String {
     format!("{:.*} {}", places, (val as f64 / divider), scale)
 }
 
-#[test]
-fn human_file_size_test() {
-    assert_eq!(human_file_size(0), "0 B");
-    assert_eq!(human_file_size(30), "30 B");
-    assert_eq!(human_file_size(512), "512 B");
-    assert_eq!(human_file_size(1000), "1000 B");
-    assert_eq!(human_file_size(1023), "1023 B");
-    assert_eq!(human_file_size(1024), "1.00 KiB");
-    assert_eq!(human_file_size(1100), "1.07 KiB");
-    assert_eq!(human_file_size(10240), "10.00 KiB");
-    assert_eq!(human_file_size(1024 * 1024), "1.00 MiB");
-    assert_eq!(human_file_size(std::usize::MAX), "16.00 EiB");
-}
-
 pub fn human_duration(dur: Duration) -> String {
     let mut time = dur.as_secs();
     let secs = time % 60;
@@ -43,7 +29,6 @@ pub fn human_duration(dur: Duration) -> String {
     }
 }
 
-#[allow(dead_code)]
 pub fn to_hex_string(bytes: impl AsRef<[u8]>) -> String {
     bytes
         .as_ref()
@@ -53,7 +38,7 @@ pub fn to_hex_string(bytes: impl AsRef<[u8]>) -> String {
         .join("")
 }
 
-const SHA512_OUTPUT_BYTES: usize = libsodium_sys::crypto_hash_sha512_BYTES as usize;
+pub const SHA512_OUTPUT_BYTES: usize = libsodium_sys::crypto_hash_sha512_BYTES as usize;
 pub fn sha512(input: &[u8]) -> Vec<u8> {
     unsafe {
         let mut output = vec![0u8; SHA512_OUTPUT_BYTES];
@@ -78,22 +63,6 @@ pub fn to_hex_string_checksummed(bytes: impl AsRef<[u8]>) -> String {
             }
         })
         .collect()
-}
-
-#[test]
-fn to_hex_string_test() {
-    assert_eq!(to_hex_string(b"123abcxyz"), "31323361626378797A");
-    assert_eq!(to_hex_string(b""), "");
-
-    assert_eq!(
-        to_hex_string_checksummed(b"123abcxyz"),
-        "31323361626378797A"
-    );
-    assert_eq!(
-        to_hex_string_checksummed(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff"),
-        "FfFfffffFFFFFfffFF"
-    );
-    assert_eq!(to_hex_string_checksummed(b""), "");
 }
 
 #[derive(Fail, Debug, PartialEq)]
@@ -145,52 +114,87 @@ pub fn try_parse_hex_string_checksummed(input_string: &str) -> Result<Vec<u8>, P
     }
 }
 
-#[test]
-fn parse_hex_test() -> Fallible<()> {
-    assert_eq!(try_parse_hex_string("31323361626378797A")?, b"123abcxyz");
-    assert_eq!(try_parse_hex_string("31 32 33")?, b"123");
-    assert_eq!(try_parse_hex_string("")?, b"");
-    assert_eq!(try_parse_hex_string("   ")?, b"");
-
-    assert_eq!(try_parse_hex_string("a"), Err(ParseHexError::InvalidLength));
-    assert_eq!(
-        try_parse_hex_string("aq"),
-        Err(ParseHexError::InvalidChar('q'))
-    );
-    assert_eq!(
-        try_parse_hex_string("3 132 33"),
-        Err(ParseHexError::InvalidChar(' '))
-    );
-
-    assert_eq!(
-        try_parse_hex_string_checksummed("31323361626378797A")?,
-        b"123abcxyz"
-    );
-    assert_eq!(
-        try_parse_hex_string_checksummed(" 31 32 33 61  62 63 78 79 7A\n")?,
-        b"123abcxyz"
-    );
-    assert_eq!(
-        try_parse_hex_string_checksummed(" 31 32 33 61  62 63 78 79 7a\n"),
-        Err(ParseHexError::InvalidChecksum(b"123abcxyz".to_vec()))
-    );
-    assert_eq!(
-        try_parse_hex_string_checksummed("FfFfffffFFFFFfffFF")?,
-        b"\xff\xff\xff\xff\xff\xff\xff\xff\xff"
-    );
-    assert_eq!(
-        try_parse_hex_string_checksummed("FfFfffffFFFFFfffFf"),
-        Err(ParseHexError::InvalidChecksum(
-            b"\xff\xff\xff\xff\xff\xff\xff\xff\xff".to_vec()
-        ))
-    );
-
-    Ok(())
-}
-
 #[inline]
 pub fn serialize_proto<T: Message>(message: &T) -> Fallible<Vec<u8>> {
     let mut buf = vec![];
     message.encode(&mut buf)?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn human_file_size_test() {
+        assert_eq!(human_file_size(0), "0 B");
+        assert_eq!(human_file_size(30), "30 B");
+        assert_eq!(human_file_size(512), "512 B");
+        assert_eq!(human_file_size(1000), "1000 B");
+        assert_eq!(human_file_size(1023), "1023 B");
+        assert_eq!(human_file_size(1024), "1.00 KiB");
+        assert_eq!(human_file_size(1100), "1.07 KiB");
+        assert_eq!(human_file_size(10240), "10.00 KiB");
+        assert_eq!(human_file_size(1024 * 1024), "1.00 MiB");
+        assert_eq!(human_file_size(std::usize::MAX), "16.00 EiB");
+    }
+
+    #[test]
+    fn to_hex_string_test() {
+        assert_eq!(to_hex_string(b"123abcxyz"), "31323361626378797a");
+        assert_eq!(to_hex_string(b""), "");
+
+        assert_eq!(
+            to_hex_string_checksummed(b"123abcxyz"),
+            "31323361626378797A"
+        );
+        assert_eq!(
+            to_hex_string_checksummed(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff"),
+            "FfFfffffFFFFFfffFF"
+        );
+        assert_eq!(to_hex_string_checksummed(b""), "");
+    }
+
+    #[test]
+    fn parse_hex_test() -> Fallible<()> {
+        assert_eq!(try_parse_hex_string("31323361626378797A")?, b"123abcxyz");
+        assert_eq!(try_parse_hex_string("31 32 33")?, b"123");
+        assert_eq!(try_parse_hex_string("")?, b"");
+        assert_eq!(try_parse_hex_string("   ")?, b"");
+
+        assert_eq!(try_parse_hex_string("a"), Err(ParseHexError::InvalidLength));
+        assert_eq!(
+            try_parse_hex_string("aq"),
+            Err(ParseHexError::InvalidChar('q'))
+        );
+        assert_eq!(
+            try_parse_hex_string("3 132 33"),
+            Err(ParseHexError::InvalidChar(' '))
+        );
+
+        assert_eq!(
+            try_parse_hex_string_checksummed("31323361626378797A")?,
+            b"123abcxyz"
+        );
+        assert_eq!(
+            try_parse_hex_string_checksummed(" 31 32 33 61  62 63 78 79 7A\n")?,
+            b"123abcxyz"
+        );
+        assert_eq!(
+            try_parse_hex_string_checksummed(" 31 32 33 61  62 63 78 79 7a\n"),
+            Err(ParseHexError::InvalidChecksum(b"123abcxyz".to_vec()))
+        );
+        assert_eq!(
+            try_parse_hex_string_checksummed("FfFfffffFFFFFfffFF")?,
+            b"\xff\xff\xff\xff\xff\xff\xff\xff\xff"
+        );
+        assert_eq!(
+            try_parse_hex_string_checksummed("FfFfffffFFFFFfffFf"),
+            Err(ParseHexError::InvalidChecksum(
+                b"\xff\xff\xff\xff\xff\xff\xff\xff\xff".to_vec()
+            ))
+        );
+
+        Ok(())
+    }
 }
