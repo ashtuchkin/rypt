@@ -3,6 +3,7 @@
  * CLI: Polish help and messages
  * CLI: Exit code should signify error if at least one file fails.
  * Don't accept empty password.
+ * Cleanup header.proto
  * Input/output file management:
     *   copy attributes from the replaced file (owner, group, perms, access/mod times)
     * Warning and skip if: symlink, non-file, multiple hardlinks

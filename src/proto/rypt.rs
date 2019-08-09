@@ -6,12 +6,12 @@ pub struct FileHeader {
     /// Decryptors must reject version above the one they support.
     #[prost(enumeration="FormatVersion", tag="1")]
     pub version: i32,
-    /// Public key for ephemeral keypair generated for this file.
+    /// Public key for the ephemeral keypair generated for this file.
     #[prost(bytes, tag="6")]
     pub ephemeral_pk: std::vec::Vec<u8>,
-    /// Ways to decrypt this file.
-    #[prost(message, repeated, tag="8")]
-    pub recipients: ::std::vec::Vec<Recipient>,
+    /// Encrypted payload_key.
+    #[prost(message, optional, tag="8")]
+    pub payload_key: ::std::option::Option<CompositeKey>,
     /// Encrypted 'EncryptedHeader' protobuf.
     #[prost(bytes, tag="9")]
     pub encrypted_header_data: std::vec::Vec<u8>,
@@ -19,9 +19,6 @@ pub struct FileHeader {
     /// the file. Optional.
     #[prost(bytes, tag="11")]
     pub associated_data: std::vec::Vec<u8>,
-    /// Shamir Secret Sharing threshold - number of keys needed to decrypt this file.
-    #[prost(uint64, tag="7")]
-    pub key_threshold: u64,
     /// Which crypto algorithms to use and corresponding config. Required.
     #[prost(oneof="file_header::CryptoFamily", tags="2")]
     pub crypto_family: ::std::option::Option<file_header::CryptoFamily>,
@@ -50,19 +47,60 @@ pub mod libsodium_crypto_family {
         Aes256gcm = 2,
     }
 }
+/// CompositeKey is a data structure that can represent a wide range of key requirement setups, allowing complex
+/// expressions like requiring "master_key OR ANY-2-OF(key1, key2, (key3a OR key3b))".
+/// When trying to decrypt a file, CompositeKey is recursively evaluated given a set of Credentials (passwords,
+/// private keys, etc), resulting in the payload key if successful.
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Recipient {
-    ///bytes recipient_id = 2;  // Optional
-    #[prost(bytes, tag="1")]
-    pub encrypted_payload: std::vec::Vec<u8>,
+pub struct CompositeKey {
+    /// Threshold defines how many key parts are required to recreate the payload key and how to do that:
+    ///   * threshold = 1 (or default 0) - any one key part is sufficient ("OR" operation), just use any of them directly.
+    ///   * threshold = N - all key parts are required ("AND" operation); to get the resulting key, do a bitwise-XOR.
+    ///   * 1 < threshold < N - use Shamir's Secret Sharing scheme. NOTE: Currently N is limited to 255 in this case.
+    /// NOTE: Total number of key parts N is not the same as key_parts.len() because EncryptedKeyParts can provide
+    /// several key parts (see num_key_parts field)
+    #[prost(uint64, tag="1")]
+    pub threshold: u64,
+    /// Key parts encrypted by Credentials. All key parts must have the same length.
+    #[prost(message, repeated, tag="2")]
+    pub key_parts: ::std::vec::Vec<EncryptedKeyParts>,
+}
+/// Key parts encrypted by Credentials. When evaluated, this structure results in 0, 1 or more key parts, depending on
+/// how many Credentials matched and how many parts are included.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EncryptedKeyParts {
+    /// How many key parts are included in the key data below. Default value of 0 is treated as 1.
+    #[prost(uint64, tag="1")]
+    pub num_key_parts: u64,
+    /// Key data is N key parts concatenated, where N is given in 'parts_included' field above. All key parts must be
+    /// the same size, so decoding is easy - just split the key data into N equal chunks.
+    #[prost(oneof="encrypted_key_parts::KeyData", tags="2, 3")]
+    pub key_data: ::std::option::Option<encrypted_key_parts::KeyData>,
+}
+pub mod encrypted_key_parts {
+    /// Key data is N key parts concatenated, where N is given in 'parts_included' field above. All key parts must be
+    /// the same size, so decoding is easy - just split the key data into N equal chunks.
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum KeyData {
+        /// Key data that is directly encrypted using one of the Credentials (using either AEAD or Box construction).
+        #[prost(bytes, tag="2")]
+        EncryptedKeyData(std::vec::Vec<u8>),
+        /// Key data is the result of recursive CompositeKey evaluation.
+        #[prost(message, tag="3")]
+        CompositeKey(super::CompositeKey),
+    }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EncryptedHeader {
+    /// Length in bytes of plaintext 'chunks' that we're encrypting and authenticating. The source file/stream
+    /// has to be split into chunks to avoid having to read all the contents into memory. All chunks have the same
+    /// length except the last one, which might be smaller.
+    /// NOTE: Corresponding chunks in encrypted file are usually larger, to accommodate MAC codes. This additional size
+    /// depends on the algorithm.
     #[prost(fixed64, tag="4")]
     pub plaintext_chunk_size: u64,
     #[prost(enumeration="SenderAuthType", tag="1")]
     pub sender_auth_type: i32,
-    ///fixed32 repudiable_auth_count = 3;
     #[prost(bytes, tag="2")]
     pub sender_pk: std::vec::Vec<u8>,
 }

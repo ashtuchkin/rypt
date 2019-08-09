@@ -121,6 +121,11 @@ pub fn serialize_proto<T: Message>(message: &T) -> Fallible<Vec<u8>> {
     Ok(buf)
 }
 
+pub fn xor_vec(a: &mut [u8], b: &[u8]) {
+    assert_eq!(a.len(), b.len());
+    a.iter_mut().zip(b).for_each(|(a, b)| *a ^= *b);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

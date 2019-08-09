@@ -1,3 +1,4 @@
+use std::cmp::max;
 use std::convert::TryInto;
 use std::mem::size_of;
 
@@ -6,18 +7,19 @@ use prost::Message;
 
 use crate::cli::{Credential, DecryptOptions, EncryptOptions};
 use crate::crypto::{
-    instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, BoxNonce, CryptoSystem,
-    CryptoSystemRng, HMacKey, KdfSalt, PrivateKey, PublicKey, AEAD_NONCE_LEN, BOX_NONCE_LEN,
-    KDF_SALT_LEN,
+    instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, BoxNonce, CryptoError,
+    CryptoSystem, CryptoSystemRng, HMacKey, KdfSalt, PrivateKey, PublicKey, AEAD_NONCE_LEN,
+    BOX_NONCE_LEN, KDF_SALT_LEN,
 };
 use crate::proto::rypt::{
-    file_header::CryptoFamily, libsodium_crypto_family::AeadAlgorithm, EncryptedHeader, FileHeader,
-    FormatVersion, LibsodiumCryptoFamily, Recipient, SenderAuthType,
+    encrypted_key_parts::KeyData, file_header::CryptoFamily,
+    libsodium_crypto_family::AeadAlgorithm, CompositeKey, EncryptedHeader, EncryptedKeyParts,
+    FileHeader, FormatVersion, LibsodiumCryptoFamily, SenderAuthType,
 };
-use crate::shamir;
+use crate::shamir::{self, SecretShareError};
 use crate::stream_crypto::CryptoSystemAEADCodec;
 use crate::types::StreamConverter;
-use crate::util::serialize_proto;
+use crate::util::{serialize_proto, xor_vec};
 
 const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 const ENCRYPTED_HEADER_NONCE: &AEADNonce = b"rypt header\0";
@@ -87,32 +89,65 @@ fn recipient_box_nonce(recipient_idx: usize) -> Box<BoxNonce> {
     nonce
 }
 
-fn encrypt_payload_for_recipient(
+fn encrypt_key_part_for_credential(
     cryptosys: &CryptoSystem,
     ephemeral_pk: &PublicKey,
     ephemeral_sk: &PrivateKey,
-    recipient_payload: &[u8],
-    recipient_idx: usize,
+    key_part: &[u8],
+    key_idx: usize,
     credential: &Credential,
-) -> Recipient {
-    let encrypted_payload = match credential {
+) -> Fallible<EncryptedKeyParts> {
+    let encrypted_key = match credential {
         Credential::Password(_) | Credential::SymmetricKey(_) => {
             let secret_key = recipient_secret_key(&*cryptosys, &ephemeral_pk, credential);
-            let nonce = recipient_secret_nonce(recipient_idx);
+            let nonce = recipient_secret_nonce(key_idx);
 
-            cryptosys.aead_encrypt_easy(&recipient_payload, &secret_key, &nonce)
+            cryptosys.aead_encrypt_easy(&key_part, &secret_key, &nonce)
         }
         Credential::PublicKey(public_key) => {
-            let nonce = recipient_box_nonce(recipient_idx);
-            cryptosys
-                .box_encrypt_easy(&recipient_payload, public_key, ephemeral_sk, &nonce)
-                .unwrap() // public key might be malformed; panic for now.
+            let nonce = recipient_box_nonce(key_idx);
+            cryptosys.box_encrypt_easy(&key_part, public_key, ephemeral_sk, &nonce)?
         }
         Credential::PrivateKey(_) => {
             panic!("Unexpected private key when encoding");
         }
     };
-    Recipient { encrypted_payload }
+    Ok(EncryptedKeyParts {
+        num_key_parts: 0, // Actually 1, but 0 acts the same and doesn't take space.
+        key_data: Some(KeyData::EncryptedKeyData(encrypted_key)),
+    })
+}
+
+fn split_key_into_key_parts<R: rand::Rng + rand::CryptoRng>(
+    key: &[u8],
+    num_parts: usize,
+    threshold: usize,
+    rng: &mut R,
+) -> Fallible<Vec<Vec<u8>>> {
+    ensure!(threshold != 0, "Threshold can't be zero");
+    ensure!(
+        threshold <= num_parts,
+        "Threshold can't be more than the number of credentials"
+    );
+    Ok(if threshold == 1 {
+        // "OR" condition: all key parts are the same and equal to the key itself.
+        vec![key.to_vec(); num_parts]
+    } else if threshold == num_parts {
+        // "AND" condition: all key parts are required; we use XOR operation to split them.
+        let mut key_parts = vec![];
+        let mut xor_part = key.to_vec();
+        for _ in 0..num_parts - 1 {
+            let mut v = vec![0u8; key.len()];
+            rng.fill_bytes(&mut v);
+            xor_vec(&mut xor_part, &v);
+            key_parts.push(v);
+        }
+        key_parts.push(xor_part);
+        key_parts
+    } else {
+        // M-out-of-N threshold: use Shamir's Secret Sharing.
+        shamir::create_secret_shares(key, num_parts, threshold, rng)?
+    })
 }
 
 pub fn encrypt_header(opts: &EncryptOptions) -> Fallible<(Vec<u8>, Box<StreamConverter>, usize)> {
@@ -120,7 +155,7 @@ pub fn encrypt_header(opts: &EncryptOptions) -> Fallible<(Vec<u8>, Box<StreamCon
 
     let crypto_family = cryptofamily_from_opts(&opts);
     let cryptosys = cryptosys_from_proto(&crypto_family)?;
-    let key_threshold = opts.key_threshold.unwrap_or_default();
+    let key_threshold = opts.key_threshold.unwrap_or(1);
 
     let chunk_size = DEFAULT_CHUNK_SIZE;
     ensure!(
@@ -146,45 +181,47 @@ pub fn encrypt_header(opts: &EncryptOptions) -> Fallible<(Vec<u8>, Box<StreamCon
         ENCRYPTED_HEADER_NONCE,
     );
 
-    // Recipients
-    let num_creds = opts.credentials.len();
-    let recipient_payloads: Vec<Vec<u8>> = if key_threshold > 1 {
-        shamir::create_secret_shares(
-            &*payload_key,
-            num_creds,
-            key_threshold,
-            &mut CryptoSystemRng::new(&*cryptosys),
-        )?
-    } else {
-        vec![payload_key.to_vec(); num_creds]
-    };
+    // Key parts
+    let key_parts = split_key_into_key_parts(
+        &*payload_key,
+        opts.credentials.len(),
+        key_threshold,
+        &mut CryptoSystemRng::new(&*cryptosys),
+    )?;
 
-    let recipients = opts
+    let encrypted_key_parts = opts
         .credentials
         .iter()
-        .zip(recipient_payloads)
+        .zip(key_parts)
         .enumerate()
-        .map(|(recipient_idx, (credential, recipient_payload))| {
-            encrypt_payload_for_recipient(
+        .map(|(key_idx, (credential, key_part))| {
+            encrypt_key_part_for_credential(
                 &*cryptosys,
                 &ephemeral_pk,
                 &ephemeral_sk,
-                &recipient_payload,
-                recipient_idx,
+                &key_part,
+                key_idx,
                 &credential,
             )
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Note, we currently use just a simple one-level CompositeKey. In the future we'll allow users
+    // to define much more complex setups.
+    let encrypted_payload_key = CompositeKey {
+        // Use 0 instead of 1 because it has the same semantics, but saves space when serialized.
+        threshold: if key_threshold == 1 { 0 } else { key_threshold } as u64,
+        key_parts: encrypted_key_parts,
+    };
 
     // Gather all the data and create FileHeader
     let header = FileHeader {
         version,
         crypto_family,
         ephemeral_pk: ephemeral_pk.to_vec(),
-        recipients,
+        payload_key: Some(encrypted_payload_key),
         encrypted_header_data,
         associated_data: opts.associated_data.clone(),
-        key_threshold: key_threshold as u64,
     };
     let serialized_header = serialize_proto(&header)?;
     let header_hash = cryptosys.hash(&serialized_header);
@@ -199,48 +236,128 @@ pub fn encrypt_header(opts: &EncryptOptions) -> Fallible<(Vec<u8>, Box<StreamCon
     Ok((serialized_header, codec, chunk_size))
 }
 
-fn decrypt_payload_for_recipient(
-    cryptosys: &CryptoSystem,
-    ephemeral_pk: &PublicKey,
-    encrypted_recipients: &[Recipient],
-    credential: &Credential,
-) -> Vec<(usize, Vec<u8>)> {
-    // Compute secret key for each credential only once, as it can be slow to derive it from password.
-    let secret_key = match credential {
+fn decryptor_from_credential<'a>(
+    cryptosys: &'a dyn CryptoSystem,
+    ephemeral_pk: &'a PublicKey,
+    credential: &'a Credential,
+) -> Box<dyn Fn(usize, &[u8]) -> Fallible<Option<Vec<u8>>> + 'a> {
+    match credential {
         Credential::Password(_) | Credential::SymmetricKey(_) => {
-            recipient_secret_key(&*cryptosys, &ephemeral_pk, credential)
+            // Compute secret key for each credential only once, as it can be slow to derive it from password.
+            let secret_key = recipient_secret_key(&*cryptosys, &ephemeral_pk, credential);
+
+            Box::new(
+                move |key_idx: usize, encrypted_key: &[u8]| -> Fallible<Option<Vec<u8>>> {
+                    let nonce = recipient_secret_nonce(key_idx);
+                    match cryptosys.aead_decrypt_easy(encrypted_key, &secret_key, &nonce) {
+                        Ok(res) => Ok(Some(res)),
+                        Err(CryptoError::InvalidCiphertext) => Ok(None),
+                        Err(err) => Err(err.into()),
+                    }
+                },
+            )
         }
-        _ => Box::new(AEADKey::default()),
+        Credential::PublicKey(_) => {
+            panic!("Unexpected public key when decoding");
+        }
+        Credential::PrivateKey(private_key) => Box::new(
+            move |key_idx: usize, encrypted_key: &[u8]| -> Fallible<Option<Vec<u8>>> {
+                let nonce = recipient_box_nonce(key_idx);
+                match cryptosys.box_decrypt_easy(encrypted_key, ephemeral_pk, private_key, &nonce) {
+                    Ok(res) => Ok(Some(res)),
+                    Err(CryptoError::InvalidCiphertext) => Ok(None),
+                    Err(err) => Err(err.into()),
+                }
+            },
+        ),
+    }
+}
+
+fn decrypt_key_parts<'a>(
+    key_parts: &EncryptedKeyParts,
+    decryptors: &[impl AsRef<dyn Fn(usize, &[u8]) -> Fallible<Option<Vec<u8>>> + 'a>],
+    key_start_idx: &mut usize,
+    key_part_start_idx: &mut usize,
+) -> Fallible<Vec<(usize, Vec<u8>)>> {
+    // 1. Try to decrypt key data using credentials (wrapped in decryptors)
+    let keydata_opt = match &key_parts.key_data {
+        Some(KeyData::EncryptedKeyData(simple_key)) => {
+            let key_idx = *key_start_idx;
+            *key_start_idx += 1;
+            decryptors
+                .iter()
+                .find_map(|decryptor| decryptor.as_ref()(key_idx, simple_key).transpose())
+                .transpose()?
+        }
+        Some(KeyData::CompositeKey(composite_key)) => {
+            decrypt_composite_key(composite_key, decryptors, key_start_idx)?
+        }
+        None => bail!("Invalid composite key: no payload"),
     };
 
-    encrypted_recipients
-        .iter()
-        .enumerate()
-        .filter_map(|(recipient_idx, recipient)| match credential {
-            Credential::Password(_) | Credential::SymmetricKey(_) => {
-                let nonce = recipient_secret_nonce(recipient_idx);
-                cryptosys
-                    .aead_decrypt_easy(&recipient.encrypted_payload, &secret_key, &nonce)
-                    .map(|secret| (recipient_idx, secret))
-                    .ok()
+    // 2. Split the key data into key parts, as needed.
+    let num_key_parts = max(key_parts.num_key_parts as usize, 1);
+    let key_part_idx = *key_part_start_idx;
+    *key_part_start_idx += num_key_parts;
+    Ok(if let Some(key_data) = keydata_opt {
+        if num_key_parts == 1 {
+            vec![(key_part_idx, key_data)]
+        } else {
+            ensure!(
+                key_data.len() % num_key_parts == 0,
+                "Invalid key data length: can't be divided evenly into key parts"
+            );
+            let key_len = key_data.len() / num_key_parts;
+            key_data
+                .chunks_exact(key_len)
+                .enumerate()
+                .map(|(idx, key)| (idx + key_part_idx, key.to_vec()))
+                .collect()
+        }
+    } else {
+        vec![]
+    })
+}
+
+fn decrypt_composite_key<'a>(
+    composite_key: &CompositeKey,
+    decryptors: &[impl AsRef<dyn Fn(usize, &[u8]) -> Fallible<Option<Vec<u8>>> + 'a>],
+    start_key_idx: &mut usize,
+) -> Fallible<Option<Vec<u8>>> {
+    let mut num_key_parts = 0;
+
+    // 1. Try to decrypt as many key parts as possible using our credentials (wrapped by decryptors)
+    let mut decrypted_key_parts = vec![];
+    for key_parts in &composite_key.key_parts {
+        let mut valid_parts =
+            decrypt_key_parts(key_parts, decryptors, start_key_idx, &mut num_key_parts)?;
+        decrypted_key_parts.append(&mut valid_parts);
+    }
+
+    // 2. Try to reconstruct resulting key using threshold logic.
+    let threshold = max(composite_key.threshold as usize, 1);
+    if threshold == 1 {
+        // "OR" operator - any of the key parts can be used directly as the key.
+        Ok(decrypted_key_parts.into_iter().next().map(|(_, key)| key))
+    } else if threshold == num_key_parts {
+        // "AND" operator - all key parts must be present. To reconstruct the key we use XOR operation.
+        if decrypted_key_parts.len() == threshold {
+            let mut key = vec![0u8; decrypted_key_parts[0].1.len()];
+            for (_, key_part) in decrypted_key_parts {
+                xor_vec(&mut key, &key_part);
             }
-            Credential::PublicKey(_) => {
-                panic!("Unexpected public key when decoding");
-            }
-            Credential::PrivateKey(private_key) => {
-                let nonce = recipient_box_nonce(recipient_idx);
-                cryptosys
-                    .box_decrypt_easy(
-                        &recipient.encrypted_payload,
-                        ephemeral_pk,
-                        private_key,
-                        &nonce,
-                    )
-                    .map(|secret| (recipient_idx, secret))
-                    .ok()
-            }
-        })
-        .collect()
+            Ok(Some(key))
+        } else {
+            Ok(None)
+        }
+    } else {
+        // N-out-of-M secret sharing case: Use Shamir's Secret sharing
+        match shamir::recover_secret(&decrypted_key_parts, threshold) {
+            Ok(key) => Ok(Some(key)),
+            Err(SecretShareError::NotEnoughShares { .. }) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
 }
 
 pub fn decrypt_header(
@@ -257,29 +374,20 @@ pub fn decrypt_header(
 
     let cryptosys = cryptosys_from_proto(&header.crypto_family)?;
     let ephemeral_pk: PublicKey = header.ephemeral_pk.as_slice().try_into()?;
-    let key_threshold = header.key_threshold as usize;
 
-    let recipient_payloads = opts
-        .credentials
-        .iter()
-        .flat_map(|credential| {
-            decrypt_payload_for_recipient(
-                &*cryptosys,
-                &ephemeral_pk,
-                &header.recipients,
-                credential,
-            )
-        })
-        .collect::<Vec<_>>();
+    let payload_key = {
+        let decryptors = opts
+            .credentials
+            .iter()
+            .map(|cred| decryptor_from_credential(&*cryptosys, &ephemeral_pk, &cred))
+            .collect::<Vec<_>>();
 
-    let payload_key = if key_threshold > 1 {
-        shamir::recover_secret(&recipient_payloads, key_threshold)?
-    } else {
-        recipient_payloads
-            .into_iter()
-            .next()
-            .ok_or_else(|| err_msg("Invalid credentials"))?
-            .1
+        let root_key = &header
+            .payload_key
+            .ok_or_else(|| err_msg("Invalid header: no payload key"))?;
+
+        decrypt_composite_key(root_key, decryptors.as_slice(), &mut 0)?
+            .ok_or_else(|| err_msg("Invalid or insufficient credentials"))?
     };
 
     let payload_key: AEADKey = payload_key.as_slice().try_into()?;
