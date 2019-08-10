@@ -30,6 +30,8 @@
    * Add gifs that show how command works
    * Add info about composite keys to INTERNALS
    * Crypto details, performance, usage, arguments.
+ * Set up basic packaging, see nice overview here https://rust-lang-nursery.github.io/cli-wg/tutorial/packaging.html
+   https://github.com/japaric/trust
  * Publish to /r/rust, hacker news.
  
 # P1
@@ -98,3 +100,5 @@
  * Kill types.rs and move its contents probably to stream_pipeline
  * Move add_extension and remove_extension to utils and use them in tests and key generation.
  * Avoid switching on the algorithm in LibSodiumCryptoSystem - do it once.
+ * Investigate why build-time deps like 'tar' are getting into release build through libsodium-sys
+   https://github.com/sodiumoxide/sodiumoxide/blob/master/libsodium-sys/Cargo.toml
