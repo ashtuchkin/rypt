@@ -74,8 +74,11 @@ Note, a lot of the information here is stale. Don't rely on it for anything.
             * https://coolaj86.com/articles/openssh-vs-openssl-key-formats/
             * https://lapo.it/asn1js/  - online ASN.1 decoder
     * ssh-agent integration?
+ * Keybase has it's own format: https://saltpack.org/encryption-format-v2
 
 <--
+## OpenSSH private key (no password):
+
 6f 70 65 6e 73 73 68 2d 6b 65 79 2d 76 31 00  # Magic string "openssh-key-v1\0"
 00 00 00 04 | 6e 6f 6e 65   # Ciphername: "none" 
 00 00 00 04 | 6e 6f 6e 65   # KdfName: "none"
@@ -100,7 +103,7 @@ Note, a lot of the information here is stale. Don't rely on it for anything.
 
 NOTE: Actual private key is 32 bytes seed, starting from offset 0xA1. From these, everything else can be recovered.
 
-==============================================================
+## OpenSSH private key (with password):
 
 6f 70 65 6e 73 73 68 2d  6b 65 79 2d 76 31 00    # Magic string "openssh-key-v1\0"
 00 00 00 0a | 61 65 73 32 35 36 2d 63 74 72   # Ciphername: aes256-ctr

@@ -1,56 +1,71 @@
 # P0
+ * CLI: Ask to delete files at the end
+   * Only if terminal attached; otherwise don't delete
+   * Command line flags to skip the question: -k, --keep-original-files; -r, --remove-original-files
+ * CLI: Add ability to create complex key schemes (major selling point)
  * CLI: Create consistent verbose/quiet rules
+   * Default to rather verbose if in terminal; further verbose should print details of algorithms, etc
  * CLI: Polish help and messages
+   * Explain file mode/stream mode
  * CLI: Exit code should signify error if at least one file fails.
- * Don't accept empty password.
- * Cleanup header.proto
+ * CLI: Don't accept empty password.
+ * Finalize 'version' field handling
+ * Review header size limitation
+ * Check carefully decoding path, with the assumption that attacker changes it.
+   * Assert all decoded payload keys are same 
  * Input/output file management:
     *   copy attributes from the replaced file (owner, group, perms, access/mod times)
     * Warning and skip if: symlink, non-file, multiple hardlinks
     * '-f' - overwrite the destination file
  * Tests
+    * Review the code and cover most sensitive areas.
+    * Test password handling
     * If target file already exists, error and skip.
     * delete the output file on error or if interrupted (ctrl-c)
     * warning and skip if already has extension, doesn't have supported ext
     * '-k, --keep' - keep the original file
     * '-c, --stdout, --to-stdout' - write to stdout; implies -k
- * Create a readme
+ * Cleanup README, INTERNALS, TODO, header.proto, header.rs to prepare for publishing
+   * Explain file mode/stream mode
+   * Add gifs that show how command works
+   * Add info about composite keys to INTERNALS
+   * Crypto details, performance, usage, arguments.
  * Publish to /r/rust, hacker news.
- * Review how OpenGPG allows several ways to decrypt, including both several public key recipients and a password
-   https://security.stackexchange.com/a/162001
- * Review OpenGPG public/private key formats https://tools.ietf.org/html/rfc4880#section-5.5
-   Or, maybe PEM/DER format (PEM = base64 DER + ---BEGIN CERTIFICATE----); ASN.1
-   https://docs.rs/simple_asn1/0.4.0/simple_asn1/
- * Review public/private key infrastructure compatibility with other systems (PGP, Keybase)
-   * Keybase has its own payload format: saltpack https://saltpack.org/encryption-format-v2
  
 # P1
- * Weak password warning
- * Sender signature and repudiable verification
  * Show whether AES256 is supported on this platform in --version command.
- * Add non-encrypted authenticated data + ability to get it, with or without password.
+ * Handle panics gracefully, redirecting users to report bugs.
+ * Weak password warning, using zxcvbn. Can be reentered by pressing 'Enter' on password verify.
+ * Add CLI commands to set and show non-encrypted authenticated data, with or without password.
+   * Potentially ask for password after reading header, to show password hint.
+ * Add CLI commands to extract and use key parts, to avoid sharing private key when using Shamir.
+ * Progress should be shown for the whole operation (estimate total size) - requires InputStream creators to read 
+   metadata (which might be a good thing anyway)
+ * Sender signature and repudiable verification
+ * Harden against information leaks:
+   * Version might be tricky - it leaks potentially secret info about file. 
+   * Avoid leaking information about file length by adding random padding, likely in the beginning. ~1 kb to 1 mb or 3%
+   * Randomize chunk length
+   * Pad encrypted header to 1kb?
  * Review how we keep secret keys in memory and clean it up (see sodium_mlock/sodium_munlock and sodium_memzero)
    * E.g. maybe use crypto_aead_aes256gcm_beforenm to create state from key and then forget it?
      https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/aes-256-gcm/aes-gcm_with_precomputation
  * Review error messages to be precise about what really happened (i.e. include file name).
- * Create functionality to see all supported algorithms and whether they are available in hardware
-   (use registry and crypto_aead_aes256gcm_is_available)  
  * Add benchmarking
  * Use MUSL for wider linux support
  * Add Windows support
- * Extend README.md: Crypto details, performance, usage, arguments. 
 
 # P2
  * Write a blog post about pipelining and compare it to a naive serial solution.
- * Errors: tell which chunk failed.
  * Adjustable chunk size (via command line args)
  * Initially write to an invisible tempfile in the same directory (using either tempfile crate or O_TMPFILE), then
    atomically make it visible.
  * Check for entropy in the beginning and add warning (see https://libsodium.gitbook.io/doc/usage#sodium_init-stalling-on-linux)
- * Support multithreading for supporting encoders (might be hard to share the state).
- * Migrate to async reading/writing and futures, plus write a post about that too.
  
 # Undecided / maybe
+ * CLI: Add color.
+ * Multithreaded encryption - possible now, but not sure if needed.
+ * Migrate to async reading/writing and futures, plus write a post about that too.
  * Switch to a different Protobuf library which supports Zero-copy mode, to allow larger authenticated data
    (see https://github.com/danburkert/prost/issues/134).
  * Implement passing password via environment variable?: maybe not password, but private key & params.
@@ -71,9 +86,15 @@
    meaningless, only signing the message makes sense.
 
 # Code improvement
+ * Consume RuntimeEnvironment in command line parsing, only provide streams in Command struct
+ * main.rs should not print error msgs, only status codes
+ * Introduce EncryptionProfile, as an interface between header processing and data encryption pipeline. 
+   Include crypto system, payload key, header hash, chunk size?; Separately SignatureProfile. Macs, signature private key.
+ * Convert InputOutputStream to tuple (InputStream, OutputStream)
  * Have stderr & verbose as a single concept to pass around, maybe logging?
  * Move cleanup functions to InputStream/OutputStream and then apply them both.
  * Rename header.rs to something more appropriate (credentials?)
  * Unit Tests!
  * Kill types.rs and move its contents probably to stream_pipeline
  * Move add_extension and remove_extension to utils and use them in tests and key generation.
+ * Avoid switching on the algorithm in LibSodiumCryptoSystem - do it once.

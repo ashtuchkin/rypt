@@ -154,7 +154,8 @@ fn read_stream(
 ) -> Fallible<()> {
     let mut last_byte = None;
     for mut chunk in input {
-        chunk.buffer.push(0); // Add one byte to allow determining final chunk.
+        // Allocate space to read one more byte than the chunk size to detect EOF (final chunk).
+        chunk.buffer.push(0);
 
         let mut read_ptr = 0;
         if let Some(last_byte) = last_byte {
@@ -186,7 +187,7 @@ fn read_stream(
             }
         }
 
-        // Stream has more data; keep last byte and send remaining data
+        // Stream has more data; keep the last byte and send the chunk to the pipeline
         last_byte = chunk.buffer.pop();
         chunk.is_last_chunk = false;
         output.send(chunk)?;

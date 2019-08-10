@@ -4,13 +4,15 @@ use std::mem::size_of;
 
 use failure::{bail, ensure, err_msg, Fallible, ResultExt};
 use prost::Message;
+use static_assertions::const_assert_eq;
 
 use crate::cli::{Credential, DecryptOptions, EncryptOptions};
 use crate::crypto::{
     instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, BoxNonce, CryptoError,
-    CryptoSystem, CryptoSystemRng, HMacKey, KdfSalt, PrivateKey, PublicKey, AEAD_NONCE_LEN,
-    BOX_NONCE_LEN, KDF_SALT_LEN,
+    CryptoSystem, CryptoSystemRng, HMacKey, KdfSalt, PrivateKey, PublicKey, AEAD_MAC_LEN,
+    AEAD_NONCE_LEN, BOX_MAC_LEN, BOX_NONCE_LEN, KDF_SALT_LEN,
 };
+use crate::header_io::MAX_HEADER_LEN;
 use crate::proto::rypt::{
     encrypted_key_parts::KeyData, file_header::CryptoFamily,
     libsodium_crypto_family::AeadAlgorithm, CompositeKey, EncryptedHeader, EncryptedKeyParts,
@@ -97,6 +99,10 @@ fn encrypt_key_part_for_credential(
     key_idx: usize,
     credential: &Credential,
 ) -> Fallible<EncryptedKeyParts> {
+    // AEAD and Box must increase the encrypted data size by the same number of bytes to avoid
+    // leaking information about the encryption method.
+    const_assert_eq!(AEAD_MAC_LEN, BOX_MAC_LEN);
+
     let encrypted_key = match credential {
         Credential::Password(_) | Credential::SymmetricKey(_) => {
             let secret_key = recipient_secret_key(&*cryptosys, &ephemeral_pk, credential);
@@ -112,8 +118,14 @@ fn encrypt_key_part_for_credential(
             panic!("Unexpected private key when encoding");
         }
     };
+
+    // NOTE: num_key_parts > 1 only makes sense for Shamir key sharing (when 1 < threshold < N)
+    // and should not be allowed for other cases.
+    let num_key_parts: usize = 1;
+
     Ok(EncryptedKeyParts {
-        num_key_parts: 0, // Actually 1, but 0 acts the same and doesn't take space.
+        // Convert 1 to 0 to save space in serialized proto.
+        num_key_parts: if num_key_parts == 1 { 0 } else { num_key_parts } as u64,
         key_data: Some(KeyData::EncryptedKeyData(encrypted_key)),
     })
 }
@@ -128,6 +140,10 @@ fn split_key_into_key_parts<R: rand::Rng + rand::CryptoRng>(
     ensure!(
         threshold <= num_parts,
         "Threshold can't be more than the number of credentials"
+    );
+    ensure!(
+        key.len() * num_parts < MAX_HEADER_LEN,
+        "Key requirement scheme requires too much space"
     );
     Ok(if threshold == 1 {
         // "OR" condition: all key parts are the same and equal to the key itself.

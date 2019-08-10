@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 
-use failure::Fallible;
+use failure::{Fallible, ResultExt};
 
 use crate::crypto::{
     AEADKey, AEADMac, AEADNonce, CryptoSystem, HashOutput, AEAD_MAC_LEN, AEAD_NONCE_LEN,
@@ -62,7 +62,8 @@ impl StreamConverter for CryptoSystemAEADCodec {
                 .aead_encrypt(message, &authed_data, &self.payload_key, &nonce, mac);
         } else {
             self.cryptosys
-                .aead_decrypt(message, &authed_data, &self.payload_key, &nonce, mac)?;
+                .aead_decrypt(message, &authed_data, &self.payload_key, &nonce, mac)
+                .with_context(|_| format!("Encrypted data is corrupt"))?;
         }
         if !self.is_encrypting {
             chunk.buffer.truncate(message_len);

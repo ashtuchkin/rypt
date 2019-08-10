@@ -1,8 +1,10 @@
 # File structure
 Assumptions:
  * Actual data is always encrypted using a per-file random 256 bit "payload key".
-   * This means we will use hardcoded nonces, as the key can be treated as unique.
+   * This means we can and will use hardcoded nonces, as the key can be treated as unique.
  * All chunks are the same size except, potentially, the last one.
+ * Encrypted data must be indistinguishable from random bytes. Only header is tractable if you don't
+   have the right credentials.
 
 ## Cryptography base operations
  * HASH(M) -> H  (H: 32 bytes)
