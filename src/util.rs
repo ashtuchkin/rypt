@@ -108,7 +108,7 @@ pub fn try_parse_hex_string_checksummed(input_string: &str) -> Result<Vec<u8>, P
     let bytes = try_parse_hex_string(input_string)?;
     let input_string_without_whitespace = input_string.replace(char::is_whitespace, "");
     if to_hex_string_checksummed(&bytes) != input_string_without_whitespace {
-        Err(ParseHexError::InvalidChecksum(bytes).into())
+        Err(ParseHexError::InvalidChecksum(bytes))
     } else {
         Ok(bytes)
     }

@@ -1,5 +1,5 @@
 #![warn(clippy::all)]
-#![allow(dead_code)]
+#![allow(dead_code, clippy::type_complexity)]
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};

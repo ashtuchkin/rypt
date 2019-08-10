@@ -14,7 +14,7 @@ pub(super) fn get_input_output_streams(
     verbose: i32,
     is_encrypt: bool,
 ) -> Fallible<Vec<InputOutputStream>> {
-    let stream_mode = matches.opt_present("s") || matches.free.is_empty() || matches.free == &["-"];
+    let stream_mode = matches.opt_present("s") || matches.free.is_empty() || matches.free == ["-"];
 
     Ok(if stream_mode {
         ensure!(
@@ -105,7 +105,7 @@ fn get_encrypted_file_extension(matches: &Matches) -> OsString {
 fn add_extension(input_path: &Path, extension: &OsStr) -> Fallible<PathBuf> {
     let mut new_ext = input_path.extension().unwrap_or_default().to_os_string();
     ensure!(
-        &new_ext != extension,
+        new_ext != extension,
         "{}: Unexpected file extension, skipping. Did you mean to decrypt (-d) this file?",
         input_path.to_string_lossy()
     );

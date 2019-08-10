@@ -14,7 +14,7 @@ pub fn get_keypair_paths(
         !matches.free.is_empty(),
         "Please provide private key filename(s), or '-' to use stdout"
     );
-    Ok(if &matches.free == &["-"] {
+    Ok(if matches.free == ["-"] {
         vec![KeyPairPaths {
             private_key_path: OutputStream::Stdout {
                 writer: env.stdout.replace(Box::new(std::io::sink())),

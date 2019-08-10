@@ -63,7 +63,7 @@ impl StreamConverter for CryptoSystemAEADCodec {
         } else {
             self.cryptosys
                 .aead_decrypt(message, &authed_data, &self.payload_key, &nonce, mac)
-                .with_context(|_| format!("Encrypted data is corrupt"))?;
+                .with_context(|_| "Encrypted data is corrupt")?;
         }
         if !self.is_encrypting {
             chunk.buffer.truncate(message_len);

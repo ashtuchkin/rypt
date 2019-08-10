@@ -1,5 +1,7 @@
-/// Implementation of Gf(256) finite field arithmetic using tables-based multiplication and division
+#![allow(clippy::wrong_self_convention, clippy::suspicious_arithmetic_impl)]
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
+
+/// Implementation of Gf(256) finite field arithmetic using tables-based multiplication and division
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -28,6 +30,7 @@ impl Gf256 {
         unsafe { std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut Gf256, s.len()) }
     }
 
+    //noinspection ALL
     #[inline]
     pub fn to_bytes(s: &[Gf256]) -> &[u8] {
         // NOTE: This is safe because Gf256 is repr(transparent)
@@ -52,7 +55,7 @@ impl Gf256 {
         Gf256(GF256_EXP[power % 255])
     }
 
-    pub fn log(&self) -> Option<usize> {
+    pub fn log(self) -> Option<usize> {
         if self.0 != 0 {
             Some(GF256_LOG[self.0 as usize] as usize)
         } else {
@@ -166,6 +169,7 @@ impl DivAssign<Gf256> for Gf256 {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::eq_op)]
     use super::*;
     use quickcheck::*;
     // NOTE: Tests are borrowed from https://github.com/SpinResearch/RustySecrets

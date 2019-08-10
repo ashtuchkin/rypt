@@ -49,7 +49,7 @@ pub fn create_secret_shares<R: rand::Rng + rand::CryptoRng>(
     threshold: usize,
     rng: &mut R,
 ) -> Result<Vec<Vec<u8>>, SecretShareError> {
-    if threshold <= 0 {
+    if threshold == 0 {
         return Err(SecretShareError::ZeroThreshold);
     }
     if num_shares < threshold {
@@ -101,7 +101,7 @@ pub fn recover_secret(
     shares: &[(usize, impl AsRef<[u8]>)], // items are (share_idx, share)
     threshold: usize,
 ) -> Result<Vec<u8>, SecretShareError> {
-    if threshold <= 0 {
+    if threshold == 0 {
         return Err(SecretShareError::ZeroThreshold);
     }
 
