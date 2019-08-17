@@ -1,14 +1,14 @@
 use failure::{bail, ensure, Error, Fallible};
 use std::cell::{RefCell, RefMut};
-use std::ops::DerefMut;
 
 use crate::terminal::set_stdin_echo;
 use crate::{Reader, Writer};
 use std::fmt::Display;
+use std::rc::Rc;
 
 pub struct BasicUI {
     program_name: String,
-    input: RefCell<Option<Reader>>,
+    input: Rc<RefCell<Option<Reader>>>,
     output: RefCell<Writer>,
     input_is_tty: bool,
     output_is_tty: bool,
@@ -25,7 +25,7 @@ impl BasicUI {
     ) -> BasicUI {
         BasicUI {
             program_name: program_name.to_string(),
-            input: RefCell::new(Some(input)),
+            input: Rc::new(RefCell::new(Some(input))),
             input_is_tty,
             output: RefCell::new(output),
             output_is_tty,
@@ -37,8 +37,8 @@ impl BasicUI {
         self.verbose = verbose;
     }
 
-    pub fn borrow_input_mut(&mut self) -> impl DerefMut<Target = Option<Reader>> + '_ {
-        self.input.borrow_mut()
+    pub fn ref_input_opt(&self) -> Rc<RefCell<Option<Reader>>> {
+        Rc::clone(&self.input)
     }
 
     // Write interface

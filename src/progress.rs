@@ -16,6 +16,7 @@ const PROGRESS_VERBOSITY: i32 = 1;
 
 pub struct ProgressPrinter<'a> {
     ui: &'a BasicUI,
+    do_print: bool,
     start_time: Instant,
     stamps: VecDeque<(Instant, usize)>,
     last_printed_period: i64,
@@ -24,11 +25,12 @@ pub struct ProgressPrinter<'a> {
     written_bytes: usize,
 }
 
-impl<'a> ProgressPrinter<'a> {
-    pub fn new(logger: &'a BasicUI) -> ProgressPrinter<'a> {
+impl ProgressPrinter<'_> {
+    pub fn new(ui: &BasicUI, force_silence: bool) -> ProgressPrinter<'_> {
         let now = Instant::now();
         ProgressPrinter {
-            ui: logger,
+            ui,
+            do_print: ui.will_print(PROGRESS_VERBOSITY) && !force_silence,
             start_time: now,
             stamps: VecDeque::from_iter(vec![(now, 0usize)].into_iter()),
             last_printed_period: -1,
@@ -43,7 +45,7 @@ impl<'a> ProgressPrinter<'a> {
     }
 
     pub fn print_file_header(&mut self, input_path: &Path, file_idx: usize, total_files: usize) {
-        if !self.ui.will_print(PROGRESS_VERBOSITY) {
+        if !self.do_print {
             return;
         }
         let mut path = input_path.to_string_lossy();
@@ -58,7 +60,7 @@ impl<'a> ProgressPrinter<'a> {
     }
 
     pub fn print_progress(&mut self, written_bytes: usize) {
-        if !self.ui.will_print(PROGRESS_VERBOSITY) {
+        if !self.do_print {
             return;
         }
         self.written_bytes += written_bytes;
@@ -149,9 +151,9 @@ impl<'a> ProgressPrinter<'a> {
     }
 }
 
-impl<'a> Drop for ProgressPrinter<'a> {
+impl Drop for ProgressPrinter<'_> {
     fn drop(&mut self) {
-        if self.printed_at_least_once {
+        if self.do_print && self.printed_at_least_once {
             self.print_progress_line();
             self.ui.print(PROGRESS_VERBOSITY, "\n\n").ok();
         }

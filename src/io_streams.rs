@@ -4,13 +4,16 @@ use std::path::{Path, PathBuf};
 
 use crate::{Reader, Writer};
 
+pub type OpenReaderCb = Box<dyn FnOnce() -> Fallible<Reader>>;
+pub type OpenWriterCb = Box<dyn FnOnce() -> Fallible<Writer>>;
+
 pub enum InputStream {
     // Real file (assume we can delete it, get its size, etc).
     File { path: PathBuf },
     // File-like object in the filesystem. No assumptions except that we can open it for reading.
     FileStream { path: PathBuf },
     // Process stdin
-    Stdin { reader: Reader },
+    Stdin { open_stdin: OpenReaderCb },
 }
 
 impl InputStream {
@@ -40,7 +43,7 @@ impl InputStream {
                 };
                 Ok((Box::new(file), filesize))
             }
-            InputStream::Stdin { reader } => Ok((reader, None)),
+            InputStream::Stdin { open_stdin } => Ok((open_stdin()?, None)),
         }
     }
 
@@ -88,7 +91,7 @@ pub enum OutputStream {
     // Real file created by us (assume we can delete it, etc)
     File { path: PathBuf },
     // Process stdout
-    Stdout { writer: Writer },
+    Stdout { open_stdout: OpenWriterCb },
 }
 
 impl OutputStream {
@@ -109,7 +112,7 @@ impl OutputStream {
                     .with_context(|e| format!("{}: {}", path.to_string_lossy(), e))?;
                 Ok(Box::new(file))
             }
-            OutputStream::Stdout { writer } => Ok(writer),
+            OutputStream::Stdout { open_stdout } => open_stdout(),
         }
     }
 

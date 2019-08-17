@@ -49,7 +49,7 @@ fn crypt_streams(
         let res = (|| {
             let InputOutputStream { input, output } = io_stream;
 
-            let mut progress_printer = ProgressPrinter::new(&ui);
+            let mut progress_printer = ProgressPrinter::new(&ui, opts.plaintext_on_tty);
             progress_printer.print_file_header(&input.path(), file_idx, total_files);
 
             let output = output?;

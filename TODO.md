@@ -90,42 +90,23 @@
    meaningless, only signing the message makes sense.
 
 # Code improvement
- + Fix handling of file deletion, on both success and failure.
- -> Test both password and plaintext are from stdin - that should work.
-   -> test that 'rypt > abc' would start encryption and not output help.
- + Don't delete existing output files.
+ * Tests:
+   * Allow situation when plaintext and password are on tty ('rypt > abc' and 'rypt -sd abc').
+     * In both cases, progress bar should not be shown.
+   * Don't delete existing output files on error.
 
- -> test './rypt -sd abc' doesn't mess up the output with progress.
- -> test './rypt > abc' correctly asks for a password and then for the plaintext.
+ * Exit with error code 1 when there are en/decryption errors.
+ * Support "warnings" (e.g. when skipping file) and exit with exit code = 2 if any. 
 
- + main.rs should not print error msgs, only status codes
-   -> That, or it should always print errors. We currently have 2 cases of silent exit: ctrl-c when entering password and 
-      ctrl-c when working. Both removable with termination_flag.  
-   -> Should we support exit code = 2 - warning?  
-     Xz does warning when skipping files; error when at least one is missing.
- + termination_flag is a PITA - remove it.
- + Maybe create "InteractiveInput" abstraction that can be passed down and used?
-    prompt(message); prompt_password(message);
-    can only be used if stdin is not used - means get_input_output_streams will have to
-    return Option<Stdin>
-    Make something like Logger.with_interactive_input(stdin)
-    
- -> NOTE: termion::read_password always converts 'stdout' to raw mode. 
-    https://linux.die.net/man/3/cfmakeraw
-    Errors out with 'Inappropriate ioctl for device (os error 25)' if stdout is redirected.
-    Windows solution: https://stackoverflow.com/a/1455007/325300
-    isatty can also be done: https://github.com/dtolnay/isatty/blob/master/src/lib.rs (stdin too https://github.com/dtolnay/isatty/issues/1)
- 
+ * Make BasicUI more testable by supplying `set_stdin_echo` from RuntimeEnvironment.
+      
  * Maybe Extract UI trait from BasicUI to enable tests.    
- * Maybe Rename Writer -> OwnedWrite
+ * Maybe Rename Writer -> OwnedWrite?
 
  * In get_input_output_streams, try to get metadata for both input and output files to check their existence/filesize/any errors. 
  
  * Introduce EncryptionProfile, as an interface between header processing and data encryption pipeline. 
    Include crypto system, payload key, header hash, chunk size?; Separately SignatureProfile. Macs, signature private key.
- * Convert InputOutputStream to tuple (InputStream, OutputStream)
- -> Have stderr & verbose as a single concept to pass around, maybe logging?
- * Move cleanup functions to InputStream/OutputStream and then apply them both.
  * Rename header.rs to something more appropriate (credentials?)
  * Unit Tests!
  * Kill types.rs and move its contents probably to stream_pipeline

@@ -49,7 +49,12 @@ pub enum InputCleanupPolicy {
 
 #[derive(Debug)]
 pub struct CryptOptions {
+    // Whether we keep or delete input files after successful encryption/decryption.
     pub input_cleanup_policy: InputCleanupPolicy,
+
+    // Whether plaintext is entered on TTY when encrypting or printed to TTY when decrypting.
+    // Currently makes ProgressPrinter quiet, so that the text is not garbled.
+    pub plaintext_on_tty: bool,
 }
 
 #[derive(Debug)]
@@ -137,16 +142,21 @@ pub fn parse_command_line(
         }
         ui.set_verbosity(verbosity);
 
+        // Callbacks that return stdin/stdout when called. Used to create InputStream/OutputStream
+        let ui_stdin = ui.ref_input_opt();
+        let open_stdin = Box::new(move || Ok(ui_stdin.borrow_mut().take().unwrap()));
+        let open_stdout = Box::new(move || Ok(stdout));
+
         // Figure out the mode: use the last mode argument, or Help/Encrypt by default.
         let no_args_provided = cmdline_args.is_empty() && stdout_is_tty;
         let command = match get_mode(&matches, no_args_provided) {
             OperationMode::Crypt(crypt_direction) => {
-                let streams = get_input_output_streams(
+                let (streams, plaintext_on_tty) = get_input_output_streams(
                     &matches,
                     crypt_direction,
-                    &mut ui.borrow_input_mut(),
+                    open_stdin,
                     stdin_is_tty,
-                    &mut Some(stdout),
+                    open_stdout,
                     stdout_is_tty,
                 )?;
 
@@ -166,6 +176,7 @@ pub fn parse_command_line(
                     streams,
                     CryptOptions {
                         input_cleanup_policy,
+                        plaintext_on_tty,
                     },
                     match crypt_direction {
                         CryptDirection::Encrypt => CryptDirectionOpts::Encrypt(EncryptOptions {
@@ -181,13 +192,13 @@ pub fn parse_command_line(
                 )
             }
             OperationMode::GenerateKeypair => {
-                let streams = get_keypair_streams(&matches, &mut Some(stdout))?;
+                let streams = get_keypair_streams(&matches, open_stdout)?;
                 Command::GenerateKeyPair(GenerateKeyPairOptions { streams })
             }
             OperationMode::Help => {
-                Command::Help(OutputStream::Stdout { writer: stdout }, program_name)
+                Command::Help(OutputStream::Stdout { open_stdout }, program_name)
             }
-            OperationMode::Version => Command::Version(OutputStream::Stdout { writer: stdout }),
+            OperationMode::Version => Command::Version(OutputStream::Stdout { open_stdout }),
         };
         Ok(command)
     })();
