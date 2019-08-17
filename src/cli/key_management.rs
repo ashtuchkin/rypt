@@ -2,24 +2,24 @@ use failure::{ensure, Fallible};
 use getopts::Matches;
 use std::path::PathBuf;
 
-use crate::cli::KeyPairPaths;
+use crate::cli::KeyPairOutputStreams;
 use crate::io_streams::OutputStream;
-use crate::RuntimeEnvironment;
+use crate::Writer;
 
-pub fn get_keypair_paths(
+pub fn get_keypair_streams(
     matches: &Matches,
-    env: &RuntimeEnvironment,
-) -> Fallible<Vec<KeyPairPaths>> {
+    stdout: &mut Option<Writer>,
+) -> Fallible<Vec<KeyPairOutputStreams>> {
     ensure!(
         !matches.free.is_empty(),
         "Please provide private key filename(s), or '-' to use stdout"
     );
     Ok(if matches.free == ["-"] {
-        vec![KeyPairPaths {
-            private_key_path: OutputStream::Stdout {
-                writer: env.stdout.replace(Box::new(std::io::sink())),
+        vec![KeyPairOutputStreams {
+            public_key_stream: None,
+            private_key_stream: OutputStream::Stdout {
+                writer: stdout.take().unwrap(),
             },
-            public_key_path: None,
         }]
     } else {
         ensure!(
@@ -32,11 +32,13 @@ pub fn get_keypair_paths(
             .map(PathBuf::from)
             .map(|private_key_path| {
                 let public_key_path = private_key_path.with_extension("pub");
-                KeyPairPaths {
-                    private_key_path: OutputStream::File {
+                KeyPairOutputStreams {
+                    private_key_stream: OutputStream::File {
                         path: private_key_path,
                     },
-                    public_key_path: Some(public_key_path),
+                    public_key_stream: Some(OutputStream::File {
+                        path: public_key_path,
+                    }),
                 }
             })
             .collect()

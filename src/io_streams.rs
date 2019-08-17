@@ -6,21 +6,21 @@ use crate::{Reader, Writer};
 
 pub enum InputStream {
     // Real file (assume we can delete it, get its size, etc).
-    File {
-        path: PathBuf,
-        remove_on_success: bool,
-    },
+    File { path: PathBuf },
     // File-like object in the filesystem. No assumptions except that we can open it for reading.
-    FileStream {
-        path: PathBuf,
-    },
+    FileStream { path: PathBuf },
     // Process stdin
-    Stdin {
-        reader: Reader,
-    },
+    Stdin { reader: Reader },
 }
 
 impl InputStream {
+    pub fn path(&self) -> &Path {
+        match &self {
+            InputStream::File { path, .. } | InputStream::FileStream { path } => &path,
+            InputStream::Stdin { .. } => "(stdin)".as_ref(),
+        }
+    }
+
     // Open the file/stream and return corresponding Reader stream, plus file size if available.
     // Note, this consumes the InputStream due to Reader in Stdin variant not being cloneable.
     pub fn open(self) -> Fallible<(Reader, Option<usize>)> {
@@ -44,26 +44,38 @@ impl InputStream {
         }
     }
 
-    pub fn path(&self) -> &Path {
-        match &self {
-            InputStream::File { path, .. } | InputStream::FileStream { path } => &path,
-            InputStream::Stdin { .. } => "(stdin)".as_ref(),
-        }
+    pub fn open_with_delete_cb(
+        self,
+    ) -> Fallible<(Reader, Option<usize>, Option<impl FnOnce() -> Fallible<()>>)> {
+        let delete_cb = match &self {
+            InputStream::File { path, .. } => {
+                let path = path.clone();
+                Some(move || {
+                    fs::remove_file(&path)
+                        .with_context(|err| {
+                            format!(
+                                "Error deleting input file {}: {}",
+                                path.to_string_lossy(),
+                                err
+                            )
+                        })
+                        .map_err(|err| err.into())
+                })
+            }
+            InputStream::Stdin { .. } | InputStream::FileStream { .. } => None,
+        };
+
+        let (reader, filesize) = self.open()?;
+        Ok((reader, filesize, delete_cb))
     }
 }
 
 impl std::fmt::Debug for InputStream {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         match &self {
-            InputStream::File {
-                path,
-                remove_on_success,
-            } => write!(
-                f,
-                "InputStream::File({}, remove_on_success: {})",
-                path.to_string_lossy(),
-                remove_on_success
-            ),
+            InputStream::File { path } => {
+                write!(f, "InputStream::File({})", path.to_string_lossy())
+            }
             InputStream::FileStream { path } => {
                 write!(f, "InputStream::FileStream({})", path.to_string_lossy())
             }
@@ -80,6 +92,13 @@ pub enum OutputStream {
 }
 
 impl OutputStream {
+    pub fn path(&self) -> &Path {
+        match &self {
+            OutputStream::File { path } => &path,
+            OutputStream::Stdout { .. } => "(stdout)".as_ref(),
+        }
+    }
+
     pub fn open(self) -> Fallible<Writer> {
         match self {
             OutputStream::File { path } => {
@@ -94,11 +113,26 @@ impl OutputStream {
         }
     }
 
-    pub fn path(&self) -> &Path {
-        match &self {
-            OutputStream::File { path, .. } => &path,
-            OutputStream::Stdout { .. } => "(stdout)".as_ref(),
-        }
+    pub fn open_with_delete_cb(self) -> Fallible<(Writer, Option<impl FnOnce() -> Fallible<()>>)> {
+        let delete_cb = match &self {
+            OutputStream::File { path } => {
+                let path = path.clone();
+                Some(move || {
+                    fs::remove_file(&path)
+                        .with_context(|err| {
+                            format!(
+                                "Error deleting output file {}: {}",
+                                path.to_string_lossy(),
+                                err
+                            )
+                        })
+                        .map_err(|err| err.into())
+                })
+            }
+            OutputStream::Stdout { .. } => None,
+        };
+
+        Ok((self.open()?, delete_cb))
     }
 }
 
@@ -117,53 +151,4 @@ impl std::fmt::Debug for OutputStream {
 pub struct InputOutputStream {
     pub input: InputStream,
     pub output: Fallible<OutputStream>,
-}
-
-impl InputOutputStream {
-    pub fn input_path(&self) -> &Path {
-        self.input.path()
-    }
-
-    pub fn open_streams(
-        self,
-    ) -> Fallible<(
-        Reader,
-        Writer,
-        Option<usize>,
-        impl FnOnce(Fallible<()>) -> Fallible<()>,
-    )> {
-        let InputOutputStream { input, output } = self;
-        let output = output?; // Pass any errors up immediately
-
-        // Prepare input/output removal paths
-        let on_success_remove_path = match &input {
-            InputStream::File {
-                path,
-                remove_on_success,
-            } if *remove_on_success => Some(path.clone()),
-            _ => None,
-        };
-        let on_error_remove_path = match &output {
-            OutputStream::File { path } => Some(path.clone()),
-            _ => None,
-        };
-
-        // Actually open the streams.
-        let (input_stream, filesize) = input.open()?;
-        let output_stream = output.open()?;
-
-        let cleanup_streams = |res| {
-            match (&res, on_success_remove_path, on_error_remove_path) {
-                // On success, remove input file if needed. Pass any errors up.
-                (Ok(()), Some(path), _) => fs::remove_file(path)?,
-
-                // On failure, remove output file if needed. Swallow error to keep original one.
-                (Err(_), _, Some(path)) => fs::remove_file(path).unwrap_or(()),
-                _ => (),
-            };
-            res
-        };
-
-        Ok((input_stream, output_stream, filesize, cleanup_streams))
-    }
 }

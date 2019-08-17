@@ -12,7 +12,7 @@ const CHUNK_NONCE: &AEADNonce = b"rych\0\0\0\0\0\0\0\0"; // Zeros will be replac
 const CHUNK_IDX_POS: usize = AEAD_NONCE_LEN - std::mem::size_of::<u64>(); // Put chunk index in the last 8 bytes.
 
 pub struct CryptoSystemAEADCodec {
-    cryptosys: Box<CryptoSystem>,
+    cryptosys: Box<dyn CryptoSystem>,
     payload_key: AEADKey,
     header_hash: HashOutput,
     is_encrypting: bool,
@@ -20,7 +20,7 @@ pub struct CryptoSystemAEADCodec {
 
 impl CryptoSystemAEADCodec {
     pub fn new(
-        cryptosys: Box<CryptoSystem>,
+        cryptosys: Box<dyn CryptoSystem>,
         payload_key: &AEADKey,
         header_hash: &HashOutput,
         is_encrypting: bool,

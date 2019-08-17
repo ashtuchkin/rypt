@@ -8,26 +8,26 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::{env, fs};
 
-pub fn random_str(mut rng: &mut rand::RngCore, len: usize) -> String {
+pub fn random_str(mut rng: &mut dyn rand::RngCore, len: usize) -> String {
     rand::distributions::Alphanumeric
         .sample_iter(&mut rng)
         .take(len)
         .collect()
 }
 
-pub fn random_bytes(rng: &mut rand::RngCore, len: usize) -> Vec<u8> {
+pub fn random_bytes(rng: &mut dyn rand::RngCore, len: usize) -> Vec<u8> {
     let mut bytes = vec![0u8; len];
     rng.fill(bytes.as_mut_slice());
     bytes
 }
 
-pub fn temp_filename(rng: &mut RngCore, extension: &str) -> PathBuf {
+pub fn temp_filename(rng: &mut dyn RngCore, extension: &str) -> PathBuf {
     env::temp_dir()
         .join(random_str(rng, 10))
         .with_extension(extension)
 }
 
-pub fn create_temp_file(rng: &mut RngCore, extension: &str) -> Fallible<(PathBuf, Vec<u8>)> {
+pub fn create_temp_file(rng: &mut dyn RngCore, extension: &str) -> Fallible<(PathBuf, Vec<u8>)> {
     let temp_file = temp_filename(rng, extension);
     let contents = random_bytes(rng, 10_000_000);
     fs::write(&temp_file, &contents)?;

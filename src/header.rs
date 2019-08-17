@@ -45,7 +45,7 @@ fn cryptofamily_from_opts(opts: &EncryptOptions) -> Option<CryptoFamily> {
 }
 
 /// Instantiate a CryptoSystem based on protobuf definition (CryptoFamily enum)
-fn cryptosys_from_proto(crypto_family: &Option<CryptoFamily>) -> Fallible<Box<CryptoSystem>> {
+fn cryptosys_from_proto(crypto_family: &Option<CryptoFamily>) -> Fallible<Box<dyn CryptoSystem>> {
     match crypto_family {
         Some(CryptoFamily::Libsodium(LibsodiumCryptoFamily { aead_algorithm })) => {
             let aead_algorithm = match AeadAlgorithm::from_i32(*aead_algorithm) {
@@ -60,7 +60,7 @@ fn cryptosys_from_proto(crypto_family: &Option<CryptoFamily>) -> Fallible<Box<Cr
 }
 
 fn recipient_secret_key(
-    cryptosys: &CryptoSystem,
+    cryptosys: &dyn CryptoSystem,
     ephemeral_pk: &PublicKey,
     credential: &Credential,
 ) -> Box<AEADKey> {
@@ -92,7 +92,7 @@ fn recipient_box_nonce(recipient_idx: usize) -> Box<BoxNonce> {
 }
 
 fn encrypt_key_part_for_credential(
-    cryptosys: &CryptoSystem,
+    cryptosys: &dyn CryptoSystem,
     ephemeral_pk: &PublicKey,
     ephemeral_sk: &PrivateKey,
     key_part: &[u8],
@@ -166,7 +166,9 @@ fn split_key_into_key_parts<R: rand::Rng + rand::CryptoRng>(
     })
 }
 
-pub fn encrypt_header(opts: &EncryptOptions) -> Fallible<(Vec<u8>, Box<StreamConverter>, usize)> {
+pub fn encrypt_header(
+    opts: &EncryptOptions,
+) -> Fallible<(Vec<u8>, Box<dyn StreamConverter>, usize)> {
     let version = FormatVersion::BasicEncryption.into();
 
     let crypto_family = cryptofamily_from_opts(&opts);
@@ -379,7 +381,7 @@ fn decrypt_composite_key<'a>(
 pub fn decrypt_header(
     serialized_header: &[u8],
     opts: &DecryptOptions,
-) -> Fallible<(Box<StreamConverter>, usize)> {
+) -> Fallible<(Box<dyn StreamConverter>, usize)> {
     let header: FileHeader = FileHeader::decode(serialized_header)
         .with_context(|e| format!("Invalid header protobuf: {}", e))?;
 

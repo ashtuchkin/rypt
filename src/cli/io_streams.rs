@@ -4,69 +4,66 @@ use std::path::{Path, PathBuf};
 use failure::{bail, ensure, Fallible};
 use getopts::Matches;
 
-use crate::cli::DEFAULT_FILE_SUFFIX;
+use crate::cli::{CryptDirection, DEFAULT_FILE_SUFFIX};
 use crate::io_streams::{InputOutputStream, InputStream, OutputStream};
-use crate::RuntimeEnvironment;
+use crate::{Reader, Writer};
 
 pub(super) fn get_input_output_streams(
     matches: &Matches,
-    env: &RuntimeEnvironment,
-    verbose: i32,
-    is_encrypt: bool,
+    crypt_direction: CryptDirection,
+    stdin: &mut Option<Reader>,
+    stdin_is_tty: bool,
+    stdout: &mut Option<Writer>,
+    stdout_is_tty: bool,
 ) -> Fallible<Vec<InputOutputStream>> {
     let stream_mode = matches.opt_present("s") || matches.free.is_empty() || matches.free == ["-"];
 
     Ok(if stream_mode {
         ensure!(
             matches.free.len() <= 1,
-            "Stdin/stdout mode only supports a single input"
+            "Streaming mode only supports a single input"
         );
         let input = match matches.free.first().map(String::as_str) {
             None | Some("-") => {
-                if !is_encrypt && env.stdin_is_tty {
+                if crypt_direction == CryptDirection::Decrypt && stdin_is_tty {
                     bail!("Encrypted data cannot be read from a terminal.");
                 }
                 InputStream::Stdin {
-                    reader: env.stdin.replace(Box::new(std::io::empty())),
+                    reader: stdin.take().unwrap(),
                 }
             }
+            // NOTE: In theory, `path` could point to stdin (e.g. '/dev/stdin'), in which case
+            // ideally we need to check it's not a terminal if encrypting. This would break the
+            // abstraction though, so we skip this check.
             Some(path) => InputStream::FileStream { path: path.into() },
         };
 
-        if is_encrypt && env.stdout_is_tty {
+        if crypt_direction == CryptDirection::Encrypt && stdout_is_tty {
             bail!("Encrypted data cannot be written to a terminal");
         }
-        let output = OutputStream::Stdout {
-            writer: env.stdout.replace(Box::new(std::io::sink())),
-        };
+        let output = Ok(OutputStream::Stdout {
+            writer: stdout.take().unwrap(),
+        });
 
-        vec![InputOutputStream {
-            input,
-            output: Ok(output),
-        }]
+        vec![InputOutputStream { input, output }]
     } else {
         if matches.free.iter().any(|s| s.trim() == "-") {
             bail!("Stdin/stdout designator '-' can only be specified once and no other files can be processed at the same time.");
         }
 
         let extension = get_encrypted_file_extension(&matches);
-        let remove_on_success = !matches.opt_present("k");
 
         let io_streams: Vec<InputOutputStream> = matches
             .free
             .iter()
-            .map(PathBuf::from)
             .map(|input_path| {
-                let output_path = if is_encrypt {
-                    add_extension(&input_path, &extension)
-                } else {
-                    remove_extension(&input_path, &extension)
+                let input_path = PathBuf::from(input_path);
+                let output_path = match crypt_direction {
+                    CryptDirection::Encrypt => add_extension(&input_path, &extension),
+                    CryptDirection::Decrypt => remove_extension(&input_path, &extension),
                 };
                 InputOutputStream {
-                    input: InputStream::File {
-                        path: input_path,
-                        remove_on_success,
-                    },
+                    input: InputStream::File { path: input_path },
                     output: output_path.map(|path| OutputStream::File { path }),
                 }
             })
@@ -76,15 +73,6 @@ pub(super) fn get_input_output_streams(
         if io_streams.iter().all(|io_stream| io_stream.output.is_err()) {
             let io_stream = io_streams.into_iter().next().unwrap();
             return Err(io_stream.output.unwrap_err());
-        }
-
-        if remove_on_success && verbose >= 0 {
-            let mut stderr = env.stderr.borrow_mut();
-            if is_encrypt {
-                writeln!(stderr, "NOTE: Original file(s) will be removed after successful encryption. Pass '-k' to keep them intact.")?;
-            } else {
-                writeln!(stderr, "NOTE: Encrypted file(s) will be removed after successful decryption. Pass '-k' to keep them intact.")?;
-            }
         }
 
         io_streams

@@ -18,16 +18,14 @@ bytes = "0.4.*"  # prost dependency
 crossbeam-channel = "0.3.*"
 getopts = "0.2.*"
 failure = "0.1.*"
-signal-hook = "0.1.*"
-
-# isatty, clear line, password input
-termion = "1.5.*"
-
 static_assertions = "0.3.*"
 
 # We use Rng/RngCore interfaces, but don't use random generator implementations - instead we reimplement
 # them using libsodium.
 rand = "0.7.*"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.*"
 
 [dev-dependencies]
 tempfile = "3.0.*"

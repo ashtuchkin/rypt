@@ -1,13 +1,13 @@
 #![warn(clippy::all)]
 #![allow(dead_code, clippy::type_complexity)]
-
-use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+#![deny(bare_trait_objects)]
 
 use failure::Fallible;
 
-use crate::cli::{parse_command_line, print_help, print_version, Command};
+use crate::cli::{
+    parse_command_line, print_help, print_version, should_delete_input_files, BasicUI, Command,
+    CryptDirectionOpts, CryptOptions,
+};
 pub use crate::errors::EarlyTerminationError;
 use crate::header::{decrypt_header, encrypt_header};
 use crate::header_io::{read_header, write_header};
@@ -15,7 +15,6 @@ use crate::io_streams::InputOutputStream;
 use crate::key_management::generate_key_pair_files;
 use crate::progress::ProgressPrinter;
 pub use crate::runtime_env::{Reader, RuntimeEnvironment, Writer};
-use crate::types::StreamConverter;
 
 pub mod cli;
 mod crypto;
@@ -30,90 +29,106 @@ mod runtime_env;
 mod shamir;
 mod stream_crypto;
 mod stream_pipeline;
+mod terminal;
 mod types;
 pub mod util;
 
-// See https://stackoverflow.com/a/27841363 for the full list.
-pub const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const PKG_NAME: &str = env!("CARGO_PKG_NAME");
-
-fn convert_streams(
+fn crypt_streams(
     io_streams: Vec<InputOutputStream>,
-    verbose: i32,
-    stderr: &mut Writer,
-    terminate_flag: &Arc<AtomicBool>,
-    create_converter: &Fn(&mut Read, &mut Write) -> Fallible<(Box<StreamConverter>, usize, usize)>,
+    opts: &CryptOptions,
+    direction: &CryptDirectionOpts,
+    ui: &BasicUI,
 ) -> Fallible<()> {
     let total_files = io_streams.len();
+    let mut success_cleanup_cbs = vec![];
+    let mut failures = vec![];
     for (file_idx, io_stream) in io_streams.into_iter().enumerate() {
-        if terminate_flag.load(Ordering::Relaxed) {
-            break;
-        }
+        let mut input_delete_cb_opt = None;
+        let mut output_delete_cb_opt = None;
 
-        let mut progress_printer = ProgressPrinter::new(stderr, verbose);
-        progress_printer.print_file_header(&io_stream.input_path(), file_idx, total_files);
+        let res = (|| {
+            let InputOutputStream { input, output } = io_stream;
 
-        let res = io_stream.open_streams().and_then(
-            |(mut input_stream, mut output_stream, input_filesize, cleanup_streams)| {
-                progress_printer.set_filesize(input_filesize);
+            let mut progress_printer = ProgressPrinter::new(&ui);
+            progress_printer.print_file_header(&input.path(), file_idx, total_files);
 
-                let res = create_converter(input_stream.as_mut(), output_stream.as_mut()).and_then(
-                    |(stream_converter, chunk_size, header_bytes)| {
-                        progress_printer.print_progress(header_bytes);
+            let output = output?;
 
-                        stream_pipeline::convert_stream(
-                            stream_converter,
-                            input_stream,
-                            output_stream,
-                            chunk_size,
-                            &mut |bytes| progress_printer.print_progress(bytes),
-                            terminate_flag.clone(),
-                        )
-                    },
-                );
-                cleanup_streams(res)
-            },
-        );
+            let (mut input_stream, input_filesize, delete_cb_opt) = input.open_with_delete_cb()?;
+            input_delete_cb_opt = delete_cb_opt;
+            progress_printer.set_filesize(input_filesize);
 
-        std::mem::drop(progress_printer); // Release mutable borrow of stderr.
-        if let Err(err) = res {
-            match err.downcast::<EarlyTerminationError>() {
-                Ok(_) => (), // Don't print anything in case of early termination
-                Err(err) => writeln!(stderr, "{}: {}", PKG_NAME, err).unwrap_or(()),
+            let (mut output_stream, delete_cb_opt) = output.open_with_delete_cb()?;
+            output_delete_cb_opt = delete_cb_opt;
+
+            let (stream_converter, chunk_size) = match direction {
+                CryptDirectionOpts::Encrypt(opts) => {
+                    let (file_header, stream_converter, chunk_size) = encrypt_header(&opts)?;
+                    write_header(&mut output_stream, &file_header)?;
+                    (stream_converter, chunk_size)
+                }
+                CryptDirectionOpts::Decrypt(opts) => {
+                    let (file_header, read_header_bytes) = read_header(&mut input_stream)?;
+                    progress_printer.print_progress(read_header_bytes);
+                    decrypt_header(&file_header, &opts)?
+                }
+            };
+
+            stream_pipeline::convert_stream(
+                stream_converter,
+                input_stream,
+                output_stream,
+                chunk_size,
+                &mut |bytes| progress_printer.print_progress(bytes),
+            )
+        })();
+
+        match res {
+            Ok(()) => {
+                // Store input file deletion callback (if not None), so that we can delete input
+                // files after confirming with user at the end.
+                success_cleanup_cbs.extend(input_delete_cb_opt);
+            }
+            Err(err) => {
+                ui.print_error(&err).ok();
+                failures.push(err);
+
+                // Delete output file on error.
+                if let Some(cb) = output_delete_cb_opt {
+                    cb().or_else(|err| ui.print_error(&err)).ok();
+                }
             }
         }
     }
+
+    // Delete input files if necessary.
+    if !success_cleanup_cbs.is_empty() && should_delete_input_files(&opts.input_cleanup_policy, &ui)
+    {
+        for cb in success_cleanup_cbs {
+            cb().or_else(|err| ui.print_error(&err)).ok();
+        }
+    }
+
+    // TODO: return error in case of !failures.is_empty()
     Ok(())
 }
 
-pub fn run(env: &RuntimeEnvironment) -> Fallible<()> {
-    match parse_command_line(&env)? {
-        Command::Encrypt(streams, opts) => convert_streams(
-            streams,
-            opts.verbose,
-            &mut env.stderr.borrow_mut(),
-            &env.terminate_flag,
-            &|_, output_stream| {
-                let (file_header, stream_converter, chunk_size) = encrypt_header(&opts)?;
-                write_header(output_stream, &file_header)?;
-                Ok((stream_converter, chunk_size, 0))
-            },
-        ),
-        Command::Decrypt(streams, opts) => convert_streams(
-            streams,
-            opts.verbose,
-            &mut env.stderr.borrow_mut(),
-            &env.terminate_flag,
-            &|input_stream, _| {
-                let (file_header, read_header_bytes) = read_header(input_stream)?;
-                let (stream_converter, chunk_size) = decrypt_header(&file_header, &opts)?;
-                Ok((stream_converter, chunk_size, read_header_bytes))
-            },
-        ),
-        Command::GenerateKeyPair(opts) => {
-            generate_key_pair_files(opts.paths, opts.verbose, &mut env.stderr.borrow_mut())
+pub fn run_command(command: Command, ui: &BasicUI) -> Fallible<()> {
+    match command {
+        Command::CryptStreams(streams, opts, direction) => {
+            crypt_streams(streams, &opts, &direction, &ui)
         }
-        Command::Help => print_help(&env),
-        Command::Version => print_version(&env),
+        Command::GenerateKeyPair(opts) => generate_key_pair_files(opts.streams, &ui),
+        Command::Help(output, program_name) => print_help(output, &program_name),
+        Command::Version(output) => print_version(output),
     }
+}
+
+pub fn run(env: RuntimeEnvironment) -> Fallible<()> {
+    let (command, ui) = parse_command_line(env)?;
+
+    run_command(command, &ui).or_else(|err| {
+        ui.print_error(&err).ok();
+        Err(err)
+    })
 }

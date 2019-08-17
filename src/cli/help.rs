@@ -1,10 +1,14 @@
-use crate::cli::define_options;
-use crate::{RuntimeEnvironment, PKG_NAME, PKG_VERSION};
+use crate::cli::options::define_options;
+use crate::io_streams::OutputStream;
 use failure::Fallible;
 
-pub fn print_help(env: &RuntimeEnvironment) -> Fallible<()> {
+// See https://stackoverflow.com/a/27841363 for the full list.
+const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub fn print_help(output: OutputStream, program_name: &str) -> Fallible<()> {
     let options = define_options();
-    let mut stdout = env.stdout.replace(Box::new(std::io::sink()));
+    let mut stdout = output.open()?;
     writeln!(
         stdout,
         "\
@@ -16,14 +20,14 @@ Encrypt/decrypt FILE-s
 With no FILE, or when FILE is '-', read standard input and write to standard output.
 
 Home page and documentation: <https://github.com/ashtuchkin/rypt>",
-        env.program_name.to_string_lossy(),
+        program_name,
         options.usage("").trim()
     )?;
     Ok(())
 }
 
-pub fn print_version(env: &RuntimeEnvironment) -> Fallible<()> {
-    let mut stdout = env.stdout.replace(Box::new(std::io::sink()));
+pub fn print_version(output: OutputStream) -> Fallible<()> {
+    let mut stdout = output.open()?;
     writeln!(stdout, "{} {}", PKG_NAME, PKG_VERSION)?;
     let libsodium_version =
         unsafe { std::ffi::CStr::from_ptr(libsodium_sys::sodium_version_string()) };

@@ -1,39 +1,40 @@
 use std::collections::VecDeque;
-use std::io::Write;
 use std::iter::FromIterator;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::{util, Writer};
+use crate::cli::BasicUI;
+use crate::terminal::TERMINAL_CLEAR_LINE;
+use crate::util;
 
 const PRINT_PERIOD: Duration = Duration::from_millis(100);
 const SPEED_CALC_PERIOD: Duration = Duration::from_secs(10); // Calculate speed over the last 10 seconds
 const KEEP_STAMPS_COUNT: usize =
     (SPEED_CALC_PERIOD.as_millis() / PRINT_PERIOD.as_millis()) as usize;
 
+const PROGRESS_VERBOSITY: i32 = 1;
+
 pub struct ProgressPrinter<'a> {
-    output: &'a mut Writer,
+    ui: &'a BasicUI,
     start_time: Instant,
     stamps: VecDeque<(Instant, usize)>,
     last_printed_period: i64,
     printed_at_least_once: bool,
     filesize: Option<usize>,
     written_bytes: usize,
-    verbose: i32,
 }
 
 impl<'a> ProgressPrinter<'a> {
-    pub fn new(output: &'a mut Writer, verbose: i32) -> ProgressPrinter<'a> {
+    pub fn new(logger: &'a BasicUI) -> ProgressPrinter<'a> {
         let now = Instant::now();
         ProgressPrinter {
-            output,
+            ui: logger,
             start_time: now,
             stamps: VecDeque::from_iter(vec![(now, 0usize)].into_iter()),
             last_printed_period: -1,
             filesize: None,
             printed_at_least_once: false,
             written_bytes: 0,
-            verbose,
         }
     }
 
@@ -42,7 +43,7 @@ impl<'a> ProgressPrinter<'a> {
     }
 
     pub fn print_file_header(&mut self, input_path: &Path, file_idx: usize, total_files: usize) {
-        if self.verbose <= 0 {
+        if !self.ui.will_print(PROGRESS_VERBOSITY) {
             return;
         }
         let mut path = input_path.to_string_lossy();
@@ -52,11 +53,12 @@ impl<'a> ProgressPrinter<'a> {
             }
             path = "(stdin)".into();
         }
-        writeln!(self.output, "{} ({}/{})", path, file_idx + 1, total_files).ok();
+        let s = format!("{} ({}/{})", path, file_idx + 1, total_files);
+        self.ui.println(PROGRESS_VERBOSITY, s).ok();
     }
 
     pub fn print_progress(&mut self, written_bytes: usize) {
-        if self.verbose <= 0 {
+        if !self.ui.will_print(PROGRESS_VERBOSITY) {
             return;
         }
         self.written_bytes += written_bytes;
@@ -110,13 +112,13 @@ impl<'a> ProgressPrinter<'a> {
         }
 
         // Write the progress line
-        write!(
-            self.output,
+        let s = format!(
             "{}{}\r",
-            termion::clear::CurrentLine,
+            TERMINAL_CLEAR_LINE,
             Self::format_progress_line(written_bytes, self.filesize, speed, eta),
-        )
-        .ok();
+        );
+
+        self.ui.print(PROGRESS_VERBOSITY, s).ok();
         self.printed_at_least_once = true;
     }
 
@@ -151,7 +153,7 @@ impl<'a> Drop for ProgressPrinter<'a> {
     fn drop(&mut self) {
         if self.printed_at_least_once {
             self.print_progress_line();
-            write!(self.output, "\n\n").ok();
+            self.ui.print(PROGRESS_VERBOSITY, "\n\n").ok();
         }
     }
 }

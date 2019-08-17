@@ -8,7 +8,7 @@ pub struct CryptoSystemRng<'a> {
 }
 
 impl CryptoSystemRng<'_> {
-    pub fn new(cryptosys: &CryptoSystem) -> CryptoSystemRng {
+    pub fn new(cryptosys: &dyn CryptoSystem) -> CryptoSystemRng {
         CryptoSystemRng { cryptosys }
     }
 }

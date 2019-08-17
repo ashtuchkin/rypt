@@ -220,6 +220,6 @@ pub trait CryptoSystem: Send {
 
 pub fn instantiate_crypto_system(
     aead_algorithm: AEADAlgorithm,
-) -> Result<Box<CryptoSystem>, CryptoInstantiationError> {
+) -> Result<Box<dyn CryptoSystem>, CryptoInstantiationError> {
     Ok(Box::new(LibSodiumCryptoSystem::new(aead_algorithm)?))
 }

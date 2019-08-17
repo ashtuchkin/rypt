@@ -16,7 +16,9 @@
  * Input/output file management:
     *   copy attributes from the replaced file (owner, group, perms, access/mod times)
     * Warning and skip if: symlink, non-file, multiple hardlinks
-    * '-f' - overwrite the destination file
+  * '-f' flag - overwrite the destination file; skip extension checks; ignore the fact that they are symlinks/hardlinks, 
+      read/write encrypted data to terminal, 
+      Convert all these errors to warnings.
  * Tests
     * Review the code and cover most sensitive areas.
     * Test password handling
@@ -88,12 +90,41 @@
    meaningless, only signing the message makes sense.
 
 # Code improvement
- * Consume RuntimeEnvironment in command line parsing, only provide streams in Command struct
- * main.rs should not print error msgs, only status codes
+ + Fix handling of file deletion, on both success and failure.
+ -> Test both password and plaintext are from stdin - that should work.
+   -> test that 'rypt > abc' would start encryption and not output help.
+ + Don't delete existing output files.
+
+ -> test './rypt -sd abc' doesn't mess up the output with progress.
+ -> test './rypt > abc' correctly asks for a password and then for the plaintext.
+
+ + main.rs should not print error msgs, only status codes
+   -> That, or it should always print errors. We currently have 2 cases of silent exit: ctrl-c when entering password and 
+      ctrl-c when working. Both removable with termination_flag.  
+   -> Should we support exit code = 2 - warning?  
+     Xz does warning when skipping files; error when at least one is missing.
+ + termination_flag is a PITA - remove it.
+ + Maybe create "InteractiveInput" abstraction that can be passed down and used?
+    prompt(message); prompt_password(message);
+    can only be used if stdin is not used - means get_input_output_streams will have to
+    return Option<Stdin>
+    Make something like Logger.with_interactive_input(stdin)
+    
+ -> NOTE: termion::read_password always converts 'stdout' to raw mode. 
+    https://linux.die.net/man/3/cfmakeraw
+    Errors out with 'Inappropriate ioctl for device (os error 25)' if stdout is redirected.
+    Windows solution: https://stackoverflow.com/a/1455007/325300
+    isatty can also be done: https://github.com/dtolnay/isatty/blob/master/src/lib.rs (stdin too https://github.com/dtolnay/isatty/issues/1)
+ 
+ * Maybe Extract UI trait from BasicUI to enable tests.    
+ * Maybe Rename Writer -> OwnedWrite
+
+ * In get_input_output_streams, try to get metadata for both input and output files to check their existence/filesize/any errors. 
+ 
  * Introduce EncryptionProfile, as an interface between header processing and data encryption pipeline. 
    Include crypto system, payload key, header hash, chunk size?; Separately SignatureProfile. Macs, signature private key.
  * Convert InputOutputStream to tuple (InputStream, OutputStream)
- * Have stderr & verbose as a single concept to pass around, maybe logging?
+ -> Have stderr & verbose as a single concept to pass around, maybe logging?
  * Move cleanup functions to InputStream/OutputStream and then apply them both.
  * Rename header.rs to something more appropriate (credentials?)
  * Unit Tests!

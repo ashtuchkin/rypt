@@ -1,3 +1,5 @@
+#![deny(bare_trait_objects)]
+
 use failure::Fallible;
 use rand::{thread_rng, RngCore};
 use rypt::cli::DEFAULT_FILE_SUFFIX;
@@ -19,8 +21,19 @@ fn help_message() -> Fallible<()> {
     Ok(())
 }
 
+#[test]
+fn print_version() -> Fallible<()> {
+    let output = util::main_cmd(&["--version"])?.output()?;
+    assert!(output.status.success());
+    let output = std::str::from_utf8(&output.stdout)?;
+
+    assert!(output.starts_with("rypt"));
+    assert!(output.contains("libsodium"));
+    Ok(())
+}
+
 fn simple_file_encrypt_decrypt(
-    rng: &mut RngCore,
+    rng: &mut dyn RngCore,
     extension: &str,
     algorithm_args: &[&str],
 ) -> Fallible<()> {
@@ -42,7 +55,7 @@ fn simple_file_encrypt_decrypt(
     let args = &[
         "--symmetric-key",
         secret_key_file_path,
-        "-q",
+        "--cleanup-input-files",
         temp_file_path.to_str().unwrap(),
     ];
     let output = util::main_cmd(&[algorithm_args, args].concat())?.output()?;
@@ -57,7 +70,7 @@ fn simple_file_encrypt_decrypt(
         "-d",
         "--symmetric-key",
         secret_key_file_path,
-        "-q",
+        "--cleanup-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -140,7 +153,7 @@ fn public_key_file_encrypt_decrypt() -> Fallible<()> {
     let output = util::main_cmd(&[
         "--public-key",
         public_key_path.to_str().unwrap(),
-        "-q",
+        "--cleanup-input-files",
         temp_file_path.to_str().unwrap(),
     ])?
     .output()?;
@@ -156,7 +169,7 @@ fn public_key_file_encrypt_decrypt() -> Fallible<()> {
         "-d",
         "--private-key",
         private_key_path.to_str().unwrap(),
-        "-q",
+        "--cleanup-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -189,7 +202,12 @@ fn threshold_encrypt_decrypt() -> Fallible<()> {
     let temp_file_path_enc = temp_file_path.with_extension(DEFAULT_FILE_SUFFIX.to_string());
 
     // 3. Encrypt the file using 5 passwords with 3 password threshold
-    let mut args = vec!["--threshold", "3", "-q", temp_file_path.to_str().unwrap()];
+    let mut args = vec![
+        "--threshold",
+        "3",
+        "--cleanup-input-files",
+        temp_file_path.to_str().unwrap(),
+    ];
     for password_path in &password_paths {
         args.push("--password-file");
         args.push(password_path.to_str().unwrap());
@@ -209,7 +227,7 @@ fn threshold_encrypt_decrypt() -> Fallible<()> {
         password_paths[2].to_str().unwrap(),
         "--password-file",
         password_paths[4].to_str().unwrap(),
-        "-q",
+        "--cleanup-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -226,7 +244,7 @@ fn threshold_encrypt_decrypt() -> Fallible<()> {
         password_paths[4].to_str().unwrap(),
         "--password-file",
         password_paths[0].to_str().unwrap(),
-        "-q",
+        "--cleanup-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -259,7 +277,12 @@ fn max_threshold_encrypt_decrypt() -> Fallible<()> {
     let temp_file_path_enc = temp_file_path.with_extension(DEFAULT_FILE_SUFFIX.to_string());
 
     // 3. Encrypt the file using 5 passwords with all 5 password threshold
-    let mut args = vec!["--threshold", "5", "-q", temp_file_path.to_str().unwrap()];
+    let mut args = vec![
+        "--threshold",
+        "5",
+        "--cleanup-input-files",
+        temp_file_path.to_str().unwrap(),
+    ];
     for password_path in &password_paths {
         args.push("--password-file");
         args.push(password_path.to_str().unwrap());
@@ -279,7 +302,7 @@ fn max_threshold_encrypt_decrypt() -> Fallible<()> {
         password_paths[2].to_str().unwrap(),
         "--password-file",
         password_paths[4].to_str().unwrap(),
-        "-q",
+        "--cleanup-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -300,7 +323,7 @@ fn max_threshold_encrypt_decrypt() -> Fallible<()> {
         password_paths[1].to_str().unwrap(),
         "--password-file",
         password_paths[3].to_str().unwrap(),
-        "-q",
+        "--cleanup-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;

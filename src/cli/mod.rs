@@ -1,20 +1,23 @@
-use std::path::PathBuf;
-
 use failure::Fallible;
 use getopts::Matches;
 
 use crate::cli::credentials::get_credentials;
-pub use crate::cli::credentials::Credential;
-pub use crate::cli::help::{print_help, print_version};
 use crate::cli::io_streams::get_input_output_streams;
-use crate::cli::key_management::get_keypair_paths;
+use crate::cli::key_management::get_keypair_streams;
+use crate::cli::options::define_options;
 use crate::io_streams::{InputOutputStream, OutputStream};
 use crate::runtime_env::RuntimeEnvironment;
+
+pub use crate::cli::credentials::Credential;
+pub use crate::cli::help::{print_help, print_version};
+pub use crate::cli::ui::BasicUI;
 
 mod credentials;
 mod help;
 mod io_streams;
 mod key_management;
+mod options;
+mod ui;
 
 pub const DEFAULT_FILE_SUFFIX: &str = "rypt";
 
@@ -24,144 +27,67 @@ pub struct EncryptOptions {
     pub fast_aead_algorithm: bool,
     pub key_threshold: Option<usize>,
     pub associated_data: Vec<u8>,
-    pub verbose: i32,
 }
 
 #[derive(Debug)]
 pub struct DecryptOptions {
     pub credentials: Vec<Credential>,
-    pub verbose: i32,
 }
 
 #[derive(Debug)]
-pub struct KeyPairPaths {
-    pub public_key_path: Option<PathBuf>,
-    pub private_key_path: OutputStream,
+pub enum CryptDirectionOpts {
+    Encrypt(EncryptOptions),
+    Decrypt(DecryptOptions),
+}
+
+#[derive(Debug)]
+pub enum InputCleanupPolicy {
+    KeepFiles,
+    DeleteFiles,
+    PromptUser,
+}
+
+#[derive(Debug)]
+pub struct CryptOptions {
+    pub input_cleanup_policy: InputCleanupPolicy,
+}
+
+#[derive(Debug)]
+pub struct KeyPairOutputStreams {
+    pub public_key_stream: Option<OutputStream>,
+    pub private_key_stream: OutputStream,
 }
 
 #[derive(Debug)]
 pub struct GenerateKeyPairOptions {
-    pub paths: Vec<KeyPairPaths>,
-    pub verbose: i32,
+    pub streams: Vec<KeyPairOutputStreams>,
 }
 
 #[derive(Debug)]
 pub enum Command {
-    Encrypt(Vec<InputOutputStream>, EncryptOptions),
-    Decrypt(Vec<InputOutputStream>, DecryptOptions),
+    CryptStreams(Vec<InputOutputStream>, CryptOptions, CryptDirectionOpts),
     GenerateKeyPair(GenerateKeyPairOptions),
-    Help,
-    Version,
+    Help(OutputStream, String),
+    Version(OutputStream),
 }
 
-fn define_options() -> getopts::Options {
-    let mut options = getopts::Options::new();
-
-    // Modes / subcommands
-    options
-        .optflag("e", "encrypt", "encrypt files (default)")
-        .optflag("d", "decrypt", "decrypt files")
-        .optflag("g", "generate-keypair", "generate public/private key pair")
-        .optflag("h", "help", "display this short help")
-        .optflag("V", "version", "display version");
-
-    // Common flags
-    options
-        .optflagmulti(
-            "v",
-            "verbose",
-            "be verbose; specify twice for even more verbosity",
-        )
-        .optflagmulti("q", "quiet", "be quiet; skip unnecessary messages");
-
-    // Credentials
-    options
-        .optopt(
-            "",
-            "prompt-passwords",
-            "request N password(s) interactively from stdin; any one of them can decrypt the files",
-            "N",
-        )
-        .optmulti(
-            "",
-            "password-file",
-            "read password(s) from the file, one per line",
-            "FILENAME",
-        )
-        .optmulti(
-            "",
-            "symmetric-key",
-            "read 32-byte hex symmetric secret key(s) from the file, one per line",
-            "FILENAME",
-        )
-        .optmulti(
-            "",
-            "public-key",
-            "read public key(s) from the file, one per line",
-            "FILENAME",
-        )
-        .optmulti(
-            "",
-            "public-key-text",
-            "provide public key (64 hex chars) as a command line argument",
-            "PUBLIC_KEY",
-        )
-        .optmulti(
-            "",
-            "private-key",
-            "read private key(s) from the file, one per line",
-            "FILENAME",
-        );
-
-    // Encryption/decryption flags
-    options
-        .optflag(
-            "",
-            "fast",
-            "use a different encryption algorithm (AES256-GCM) that is faster, but supported only on newer x86 processors",
-        )
-        .optflag(
-            "k",
-            "keep-files",
-            "don't delete original files on successful operation",
-        )
-        .optflag(
-            "s",
-            "stdout",
-            "write to standard output; implies -k",
-        )
-        .optflag(
-            "",
-            "skip-checksum-check",
-            "don't check public keys for validity",
-        )
-        .optopt(
-            "", "threshold", "Number of keys required to decrypt the file", "NUM_KEYS"
-        )
-        .optopt(
-            "S",
-            "suffix",
-            &format!(
-                "encrypted file suffix, defaults to \".{}\"",
-                DEFAULT_FILE_SUFFIX
-            ),
-            ".suf",
-        );
-    options
-}
-
-#[derive(Clone, Copy)]
-enum OperationMode {
+#[derive(Clone, Copy, PartialEq)]
+enum CryptDirection {
     Encrypt,
     Decrypt,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum OperationMode {
+    Crypt(CryptDirection),
     GenerateKeypair,
     Help,
     Version,
 }
 
 const MODES: &[(&str, OperationMode)] = &[
-    ("e", OperationMode::Encrypt),
-    ("d", OperationMode::Decrypt),
+    ("e", OperationMode::Crypt(CryptDirection::Encrypt)),
+    ("d", OperationMode::Crypt(CryptDirection::Decrypt)),
     ("g", OperationMode::GenerateKeypair),
     ("h", OperationMode::Help),
     ("V", OperationMode::Version),
@@ -184,43 +110,116 @@ fn get_mode(matches: &Matches, no_args_provided: bool) -> OperationMode {
         .map(|(_, val)| val);
 
     // Encrypt is the default mode
-    last_mode.unwrap_or(OperationMode::Encrypt)
+    last_mode.unwrap_or(OperationMode::Crypt(CryptDirection::Encrypt))
 }
 
-pub fn parse_command_line(env: &RuntimeEnvironment) -> Fallible<Command> {
-    let options = define_options();
-    let matches = options.parse(&env.cmdline_args)?;
-    let verbose = matches.opt_count("v") as i32 - matches.opt_count("q") as i32;
-    let skip_checksum = matches.opt_present("skip-checksum-check");
+pub fn parse_command_line(
+    RuntimeEnvironment {
+        program_name,
+        cmdline_args,
+        stdin,
+        stdout,
+        stderr,
+        stdin_is_tty,
+        stdout_is_tty,
+        stderr_is_tty,
+    }: RuntimeEnvironment,
+) -> Fallible<(Command, BasicUI)> {
+    let mut ui = BasicUI::from_streams(&program_name, stdin, stdin_is_tty, stderr, stderr_is_tty);
 
-    // Figure out the mode: use the last mode argument, or Help/Encrypt by default.
-    Ok(match get_mode(&matches, env.cmdline_args.is_empty()) {
-        OperationMode::Encrypt => {
-            let streams = get_input_output_streams(&matches, &env, verbose, true)?;
-            let credentials = get_credentials(&matches, &env, true, skip_checksum)?;
-            let options = EncryptOptions {
-                credentials,
-                fast_aead_algorithm: matches.opt_present("fast"),
-                associated_data: vec![],
-                key_threshold: matches.opt_get("threshold")?,
-                verbose,
-            };
-            Command::Encrypt(streams, options)
+    let command_res = (|| -> Fallible<Command> {
+        let options = define_options();
+        let matches = options.parse(&cmdline_args)?;
+        let mut verbosity = matches.opt_count("v") as i32 - matches.opt_count("q") as i32;
+        if stdin_is_tty && stderr_is_tty {
+            // Increase verbosity when being used interactively.
+            verbosity += 1;
         }
-        OperationMode::Decrypt => {
-            let streams = get_input_output_streams(&matches, &env, verbose, false)?;
-            let credentials = get_credentials(&matches, &env, false, skip_checksum)?;
-            let options = DecryptOptions {
-                credentials,
-                verbose,
-            };
-            Command::Decrypt(streams, options)
+        ui.set_verbosity(verbosity);
+
+        // Figure out the mode: use the last mode argument, or Help/Encrypt by default.
+        let no_args_provided = cmdline_args.is_empty() && stdout_is_tty;
+        let command = match get_mode(&matches, no_args_provided) {
+            OperationMode::Crypt(crypt_direction) => {
+                let streams = get_input_output_streams(
+                    &matches,
+                    crypt_direction,
+                    &mut ui.borrow_input_mut(),
+                    stdin_is_tty,
+                    &mut Some(stdout),
+                    stdout_is_tty,
+                )?;
+
+                let credentials = get_credentials(&matches, crypt_direction, &ui)?;
+
+                let input_cleanup_policy = if matches.opt_present("keep-input-files") {
+                    InputCleanupPolicy::KeepFiles
+                } else if matches.opt_present("cleanup-input-files") {
+                    InputCleanupPolicy::DeleteFiles
+                } else if stdin_is_tty {
+                    InputCleanupPolicy::PromptUser
+                } else {
+                    InputCleanupPolicy::KeepFiles
+                };
+
+                Command::CryptStreams(
+                    streams,
+                    CryptOptions {
+                        input_cleanup_policy,
+                    },
+                    match crypt_direction {
+                        CryptDirection::Encrypt => CryptDirectionOpts::Encrypt(EncryptOptions {
+                            credentials,
+                            fast_aead_algorithm: matches.opt_present("fast"),
+                            associated_data: vec![],
+                            key_threshold: matches.opt_get("threshold")?,
+                        }),
+                        CryptDirection::Decrypt => {
+                            CryptDirectionOpts::Decrypt(DecryptOptions { credentials })
+                        }
+                    },
+                )
+            }
+            OperationMode::GenerateKeypair => {
+                let streams = get_keypair_streams(&matches, &mut Some(stdout))?;
+                Command::GenerateKeyPair(GenerateKeyPairOptions { streams })
+            }
+            OperationMode::Help => {
+                Command::Help(OutputStream::Stdout { writer: stdout }, program_name)
+            }
+            OperationMode::Version => Command::Version(OutputStream::Stdout { writer: stdout }),
+        };
+        Ok(command)
+    })();
+
+    match command_res {
+        Ok(command) => Ok((command, ui)),
+        Err(err) => {
+            ui.print_error(&err).ok();
+            Err(err)
         }
-        OperationMode::GenerateKeypair => {
-            let paths = get_keypair_paths(&matches, &env)?;
-            Command::GenerateKeyPair(GenerateKeyPairOptions { paths, verbose })
-        }
-        OperationMode::Help => Command::Help,
-        OperationMode::Version => Command::Version,
-    })
+    }
+}
+
+pub fn should_delete_input_files(input_cleanup_policy: &InputCleanupPolicy, ui: &BasicUI) -> bool {
+    match input_cleanup_policy {
+        InputCleanupPolicy::KeepFiles => false,
+        InputCleanupPolicy::DeleteFiles => true,
+        InputCleanupPolicy::PromptUser => loop {
+            match ui.read_prompt("Would you like to remove original files? [y/N]: ") {
+                Ok(s) => match s.to_ascii_lowercase().as_str() {
+                    "y" | "yes" => break true,
+                    "" | "n" | "no" => break false,
+                    _ => {
+                        ui.print_interactive("Didn't get that, enter 'y' or 'n'.")
+                            .ok();
+                    }
+                },
+                Err(e) => {
+                    ui.print_error(&e).ok();
+                    break false;
+                }
+            }
+        },
+    }
 }

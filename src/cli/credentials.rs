@@ -4,10 +4,9 @@ use std::fs;
 use failure::{ensure, format_err, Fallible, ResultExt};
 use getopts::Matches;
 
+use crate::cli::{BasicUI, CryptDirection};
 use crate::crypto::{AEADKey, PrivateKey, PublicKey};
-use crate::errors::EarlyTerminationError;
 use crate::util::{try_parse_hex_string, try_parse_hex_string_checksummed};
-use crate::RuntimeEnvironment;
 
 pub enum Credential {
     Password(String),
@@ -29,10 +28,10 @@ impl std::fmt::Debug for Credential {
 
 pub(super) fn get_credentials(
     matches: &Matches,
-    env: &RuntimeEnvironment,
-    is_encrypt: bool,
-    skip_checksum: bool,
+    crypt_direction: CryptDirection,
+    ui: &BasicUI,
 ) -> Fallible<Vec<Credential>> {
+    let skip_checksum = matches.opt_present("skip-checksum-check");
     let mut credentials = vec![];
 
     // Read the password files
@@ -56,7 +55,7 @@ pub(super) fn get_credentials(
     // Read public keys
     for filename in matches.opt_strs("public-key") {
         ensure!(
-            is_encrypt,
+            crypt_direction != CryptDirection::Decrypt,
             "Public keys should not be passed in when decrypting"
         );
         let creds = read_file_lines(&filename, &|line| {
@@ -69,7 +68,7 @@ pub(super) fn get_credentials(
     // Read public keys provided directly
     for public_key in matches.opt_strs("public-key-text") {
         ensure!(
-            is_encrypt,
+            crypt_direction != CryptDirection::Encrypt,
             "Public keys should not be passed in when decrypting"
         );
         let public_key = from_hex32(&public_key, skip_checksum)
@@ -81,7 +80,7 @@ pub(super) fn get_credentials(
     // Read private keys
     for filename in matches.opt_strs("private-key") {
         ensure!(
-            !is_encrypt,
+            crypt_direction != CryptDirection::Encrypt,
             "Private keys should not be passed in when encrypting"
         );
         let creds = read_file_lines(&filename, &|line| {
@@ -95,7 +94,8 @@ pub(super) fn get_credentials(
     let default_num_passwords = if credentials.is_empty() { 1 } else { 0 };
     let num_passwords = matches.opt_get_default("prompt-passwords", default_num_passwords)?;
     for password_idx in 0..num_passwords {
-        let password = read_password_interactively(env, is_encrypt, password_idx, num_passwords)?;
+        let password =
+            read_password_interactively(crypt_direction, ui, password_idx, num_passwords)?;
         credentials.push(password);
     }
 
@@ -134,7 +134,7 @@ fn from_hex64(line: &str, skip_checksum: bool) -> Fallible<Box<[u8; 64]>> {
 
 fn read_file_lines(
     filename: &str,
-    line_to_cred_fn: &Fn(&str) -> Fallible<Credential>,
+    line_to_cred_fn: &dyn Fn(&str) -> Fallible<Credential>,
 ) -> Fallible<Vec<Credential>> {
     let credentials = fs::read_to_string(filename)?
         .lines()
@@ -147,25 +147,14 @@ fn read_file_lines(
     Ok(credentials)
 }
 
-fn read_password(env: &RuntimeEnvironment, message: &str) -> Fallible<String> {
-    let mut stderr = env.stderr.borrow_mut();
-    let mut stdin = env.stdin.borrow_mut();
-    write!(stderr, "{}", message)?;
-    let res = termion::input::TermRead::read_passwd(&mut stdin.as_mut(), &mut stderr.as_mut());
-    writeln!(stderr)?;
-
-    // NOTE: `res` will be Ok(None) if user entered Ctrl-C or Ctrl-D. We translate it to 'canceled'.
-    Ok(res?.ok_or_else(|| EarlyTerminationError {})?)
-}
-
 fn read_password_interactively(
-    env: &RuntimeEnvironment,
-    is_encrypt: bool,
+    crypt_direction: CryptDirection,
+    ui: &BasicUI,
     password_idx: usize,
     num_passwords: usize,
 ) -> Fallible<Credential> {
     ensure!(
-        env.stdin_is_tty && env.stderr_is_tty,
+        ui.can_read(),
         "Can't read password from a non-TTY stdin. \
          Use '--password-file' if you'd like to provide password non-interactively."
     );
@@ -177,14 +166,13 @@ fn read_password_interactively(
     };
     loop {
         let message = format!("Enter password{}: ", suffix);
-        let password = read_password(&env, &message)?;
+        let password = ui.read_password(&message)?;
 
         // When encrypting, we request the same password twice to ensure it's entered correctly.
-        if is_encrypt {
-            let password_again = read_password(&env, "Enter password again: ")?;
+        if crypt_direction == CryptDirection::Encrypt {
+            let password_again = ui.read_password("Enter password again: ")?;
             if password_again != password {
-                let mut stderr = env.stderr.borrow_mut();
-                writeln!(stderr, "Passwords didn't match, try again.")?;
+                ui.print_interactive("Passwords didn't match, try again.")?;
                 continue;
             }
         }

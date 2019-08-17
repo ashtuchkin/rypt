@@ -1,13 +1,11 @@
 use std::io::{ErrorKind, Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::thread;
 
 use crossbeam_channel::{Receiver, SendError, Sender};
 use failure::{bail, Fallible};
 
-use crate::errors::EarlyTerminationError;
 use crate::types::{Chunk, ChunkConfig, StreamConverter};
+use crate::{Reader, Writer};
 
 const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in channels.
 
@@ -35,12 +33,11 @@ const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in c
 /// Main thread here only supplies initial Chunks to the pipeline, then redirects used Chunks back
 /// to the start of the pipeline. It also calls the progress callback to notify the caller.
 pub fn convert_stream(
-    stream_converter: Box<StreamConverter>,
-    input_stream: Box<Read + Send>,
-    output_stream: Box<Write + Send>,
+    stream_converter: Box<dyn StreamConverter>,
+    input_stream: Reader,
+    output_stream: Writer,
     chunk_size: usize,
-    progress_cb: &mut FnMut(usize),
-    terminate_flag: Arc<AtomicBool>,
+    progress_cb: &mut dyn FnMut(usize),
 ) -> Fallible<()> {
     let ChunkConfig {
         input_chunk_asize,
@@ -82,11 +79,6 @@ pub fn convert_stream(
 
     // Wait while data flows through the pipeline, resupplying used chunks back to the reader.
     for mut chunk in final_receiver {
-        // Check if we need to terminate early
-        if terminate_flag.load(Ordering::Relaxed) {
-            break;
-        }
-
         // Calculate the size of the input Chunk that resulted in this output Chunk.
         let written_bytes = chunk.buffer.len() - output_chunk_asize + input_chunk_asize;
 
@@ -141,14 +133,11 @@ pub fn convert_stream(
         }
     }
 
-    if terminate_flag.load(Ordering::Relaxed) {
-        return Err(EarlyTerminationError {}.into());
-    }
     Ok(())
 }
 
 fn read_stream(
-    mut input_stream: Box<Read + Send>,
+    mut input_stream: Reader,
     input: Receiver<Chunk>,
     output: Sender<Chunk>,
 ) -> Fallible<()> {
@@ -199,7 +188,7 @@ fn read_stream(
 }
 
 fn convert_chunks(
-    mut stream_converter: Box<StreamConverter>,
+    mut stream_converter: Box<dyn StreamConverter>,
     input: Receiver<Chunk>,
     output: Sender<Chunk>,
 ) -> Fallible<()> {
@@ -210,7 +199,7 @@ fn convert_chunks(
 }
 
 fn write_stream(
-    mut output_stream: Box<Write + Send>,
+    mut output_stream: Writer,
     input: Receiver<Chunk>,
     output: Sender<Chunk>,
 ) -> Fallible<()> {
