@@ -211,26 +211,3 @@ pub fn parse_command_line(
         }
     }
 }
-
-pub fn should_delete_input_files(input_cleanup_policy: &InputCleanupPolicy, ui: &BasicUI) -> bool {
-    match input_cleanup_policy {
-        InputCleanupPolicy::KeepFiles => false,
-        InputCleanupPolicy::DeleteFiles => true,
-        InputCleanupPolicy::PromptUser => loop {
-            match ui.read_prompt("Would you like to remove original files? [y/N]: ") {
-                Ok(s) => match s.to_ascii_lowercase().as_str() {
-                    "y" | "yes" => break true,
-                    "" | "n" | "no" => break false,
-                    _ => {
-                        ui.print_interactive("Didn't get that, enter 'y' or 'n'.")
-                            .ok();
-                    }
-                },
-                Err(e) => {
-                    ui.print_error(&e).ok();
-                    break false;
-                }
-            }
-        },
-    }
-}

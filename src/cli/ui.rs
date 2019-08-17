@@ -103,6 +103,21 @@ impl BasicUI {
         Ok(String::from_utf8(bytes)?)
     }
 
+    pub fn read_prompt_bool(&self, prompt: impl Display, default: bool) -> Fallible<bool> {
+        let yn_helper = if default { "[Y/n]" } else { "[y/N]" };
+        let prompt = format!("{} {}: ", prompt, yn_helper);
+        loop {
+            match self.read_prompt(&prompt)?.to_ascii_lowercase().as_str() {
+                "y" | "yes" => return Ok(true),
+                "n" | "no" => return Ok(false),
+                "" => return Ok(default),
+                _ => {
+                    self.print_interactive("Invalid input, please enter 'y' or 'n'.")?;
+                }
+            }
+        }
+    }
+
     pub fn read_password(&self, prompt: impl Display) -> Fallible<String> {
         ensure!(self.can_read(), "Can't read from a non-TTY input");
         set_stdin_echo(false);

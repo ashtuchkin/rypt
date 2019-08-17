@@ -5,8 +5,8 @@
 use failure::Fallible;
 
 use crate::cli::{
-    parse_command_line, print_help, print_version, should_delete_input_files, BasicUI, Command,
-    CryptDirectionOpts, CryptOptions,
+    parse_command_line, print_help, print_version, BasicUI, Command, CryptDirectionOpts,
+    CryptOptions, InputCleanupPolicy,
 };
 pub use crate::errors::EarlyTerminationError;
 use crate::header::{decrypt_header, encrypt_header};
@@ -102,10 +102,19 @@ fn crypt_streams(
     }
 
     // Delete input files if necessary.
-    if !success_cleanup_cbs.is_empty() && should_delete_input_files(&opts.input_cleanup_policy, &ui)
-    {
-        for cb in success_cleanup_cbs {
-            cb().or_else(|err| ui.print_error(&err)).ok();
+    if !success_cleanup_cbs.is_empty() {
+        let should_delete_input_files = match opts.input_cleanup_policy {
+            InputCleanupPolicy::KeepFiles => false,
+            InputCleanupPolicy::DeleteFiles => true,
+            InputCleanupPolicy::PromptUser => {
+                ui.read_prompt_bool("Would you like to remove original file(s)?", false)?
+            }
+        };
+
+        if should_delete_input_files {
+            for cb in success_cleanup_cbs {
+                cb().or_else(|err| ui.print_error(&err)).ok();
+            }
         }
     }
 
