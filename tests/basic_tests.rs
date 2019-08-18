@@ -55,7 +55,7 @@ fn simple_file_encrypt_decrypt(
     let args = &[
         "--symmetric-key",
         secret_key_file_path,
-        "--cleanup-input-files",
+        "--delete-input-files",
         temp_file_path.to_str().unwrap(),
     ];
     let output = util::main_cmd(&[algorithm_args, args].concat())?.output()?;
@@ -70,7 +70,7 @@ fn simple_file_encrypt_decrypt(
         "-d",
         "--symmetric-key",
         secret_key_file_path,
-        "--cleanup-input-files",
+        "--delete-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -153,7 +153,7 @@ fn public_key_file_encrypt_decrypt() -> Fallible<()> {
     let output = util::main_cmd(&[
         "--public-key",
         public_key_path.to_str().unwrap(),
-        "--cleanup-input-files",
+        "--delete-input-files",
         temp_file_path.to_str().unwrap(),
     ])?
     .output()?;
@@ -169,7 +169,7 @@ fn public_key_file_encrypt_decrypt() -> Fallible<()> {
         "-d",
         "--private-key",
         private_key_path.to_str().unwrap(),
-        "--cleanup-input-files",
+        "--delete-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -205,7 +205,7 @@ fn threshold_encrypt_decrypt() -> Fallible<()> {
     let mut args = vec![
         "--threshold",
         "3",
-        "--cleanup-input-files",
+        "--delete-input-files",
         temp_file_path.to_str().unwrap(),
     ];
     for password_path in &password_paths {
@@ -227,7 +227,7 @@ fn threshold_encrypt_decrypt() -> Fallible<()> {
         password_paths[2].to_str().unwrap(),
         "--password-file",
         password_paths[4].to_str().unwrap(),
-        "--cleanup-input-files",
+        "--delete-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -244,7 +244,7 @@ fn threshold_encrypt_decrypt() -> Fallible<()> {
         password_paths[4].to_str().unwrap(),
         "--password-file",
         password_paths[0].to_str().unwrap(),
-        "--cleanup-input-files",
+        "--delete-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -280,7 +280,7 @@ fn max_threshold_encrypt_decrypt() -> Fallible<()> {
     let mut args = vec![
         "--threshold",
         "5",
-        "--cleanup-input-files",
+        "--delete-input-files",
         temp_file_path.to_str().unwrap(),
     ];
     for password_path in &password_paths {
@@ -302,7 +302,7 @@ fn max_threshold_encrypt_decrypt() -> Fallible<()> {
         password_paths[2].to_str().unwrap(),
         "--password-file",
         password_paths[4].to_str().unwrap(),
-        "--cleanup-input-files",
+        "--delete-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;
@@ -323,7 +323,7 @@ fn max_threshold_encrypt_decrypt() -> Fallible<()> {
         password_paths[1].to_str().unwrap(),
         "--password-file",
         password_paths[3].to_str().unwrap(),
-        "--cleanup-input-files",
+        "--delete-input-files",
         temp_file_path_enc.to_str().unwrap(),
     ])?
     .output()?;

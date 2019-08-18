@@ -164,7 +164,7 @@ pub fn parse_command_line(
 
                 let input_cleanup_policy = if matches.opt_present("keep-input-files") {
                     InputCleanupPolicy::KeepFiles
-                } else if matches.opt_present("cleanup-input-files") {
+                } else if matches.opt_present("delete-input-files") {
                     InputCleanupPolicy::DeleteFiles
                 } else if stdin_is_tty {
                     InputCleanupPolicy::PromptUser

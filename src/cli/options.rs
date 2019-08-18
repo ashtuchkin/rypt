@@ -74,7 +74,7 @@ pub fn define_options() -> Options {
         )
         .optflag(
             "",
-            "cleanup-input-files",
+            "delete-input-files",
             "delete original files on successful operation",
         )
         .optflag(
