@@ -89,7 +89,8 @@ impl BasicUI {
             match input.read(std::slice::from_mut(&mut byte)) {
                 Ok(0) => bail!("Error reading from stdin: EOF"),
                 Ok(1) => match byte {
-                    b'\n' | b'\r' => break,
+                    b'\r' => continue,  // On windows, pressing enter gives \r\n; skip the former.
+                    b'\n' => break,
                     b => bytes.push(b),
                 },
                 Ok(_) => unreachable!(),

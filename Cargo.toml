@@ -27,6 +27,9 @@ rand = "0.7.*"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.*"
 
+[target.'cfg(windows)'.dependencies]
+winapi = {version = "0.3.*", features = ["processenv", "consoleapi", "wincon"]}
+
 [dev-dependencies]
 tempfile = "3.0.*"
 hex-literal = "0.2.*"
