@@ -2,6 +2,7 @@ use failure::{bail, ensure, Error, Fallible};
 use std::cell::{RefCell, RefMut};
 
 use crate::terminal::set_stdin_echo;
+use crate::terminal::TERMINAL_CLEAR_LINE;
 use crate::{Reader, Writer};
 use std::fmt::Display;
 use std::rc::Rc;
@@ -57,6 +58,18 @@ impl BasicUI {
         Ok(())
     }
 
+    pub fn print_overwrite_line(&self, verbosity: i32, message: impl Display) -> Fallible<()> {
+        if self.will_print(verbosity) {
+            write!(
+                self.output.borrow_mut(),
+                "{}{}\r",
+                TERMINAL_CLEAR_LINE,
+                message
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn print(&self, verbosity: i32, message: impl Display) -> Fallible<()> {
         if self.will_print(verbosity) {
             write!(self.output.borrow_mut(), "{}", message)?;
@@ -89,7 +102,7 @@ impl BasicUI {
             match input.read(std::slice::from_mut(&mut byte)) {
                 Ok(0) => bail!("Error reading from stdin: EOF"),
                 Ok(1) => match byte {
-                    b'\r' => continue,  // On windows, pressing enter gives \r\n; skip the former.
+                    b'\r' => continue, // On windows, pressing enter gives \r\n; skip the former.
                     b'\n' => break,
                     b => bytes.push(b),
                 },

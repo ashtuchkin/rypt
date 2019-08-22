@@ -1,23 +1,43 @@
 // Terminal sequence to clear current line without moving cursor.
 // Supported on all major terminals, including *nix, MacOS and Windows.
-// TODO: Support on Command Prompt on Windows.
 pub const TERMINAL_CLEAR_LINE: &str = "\x1B[2K";
 
 #[cfg(unix)]
-pub fn is_tty<T: std::os::unix::io::AsRawFd>(stream: &T) -> bool {
-    unsafe { libc::isatty(stream.as_raw_fd()) == 1 }
+pub fn init_console() {
+    // nothing to do
 }
 
-
+// In Windows we need to explicitly enable processing of terminal sequences.
 #[cfg(windows)]
-pub fn is_tty<T: std::os::windows::io::AsRawHandle>(stream: &T) -> bool {
-    use winapi::um::consoleapi::GetConsoleMode;
+pub fn init_console() {
+    use winapi::um::{
+        consoleapi::{GetConsoleMode, SetConsoleMode},
+        processenv::GetStdHandle,
+        winbase::STD_ERROR_HANDLE,
+        wincon::{DISABLE_NEWLINE_AUTO_RETURN, ENABLE_VIRTUAL_TERMINAL_PROCESSING},
+    };
+
     unsafe {
-        let mut out = 0;
-        GetConsoleMode(stream.as_raw_handle(), &mut out) != 0
+        let hstderr = GetStdHandle(STD_ERROR_HANDLE);
+        let mut mode = 0u32;
+        GetConsoleMode(hstderr, &mut mode);
+        // NOTE: We intentionally ignore errors here.
+
+        mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+        SetConsoleMode(hstderr, mode);
     }
 }
 
+#[cfg(unix)]
+pub fn is_tty(stream: &dyn std::os::unix::io::AsRawFd) -> bool {
+    unsafe { libc::isatty(stream.as_raw_fd()) == 1 }
+}
+
+#[cfg(windows)]
+pub fn is_tty(stream: &dyn std::os::windows::io::AsRawHandle) -> bool {
+    use winapi::um::consoleapi::GetConsoleMode;
+    unsafe { GetConsoleMode(stream.as_raw_handle(), &mut 0u32) != 0 }
+}
 
 // Code is taken from https://stackoverflow.com/a/1455007/325300
 // and https://github.com/dtolnay/isatty/blob/master/src/lib.rs
@@ -42,22 +62,22 @@ pub fn set_stdin_echo(enable: bool) {
 #[cfg(windows)]
 pub fn set_stdin_echo(enable: bool) {
     use winapi::um::{
-        processenv::{GetStdHandle},
         consoleapi::{GetConsoleMode, SetConsoleMode},
+        processenv::GetStdHandle,
         winbase::STD_INPUT_HANDLE,
-        wincon::ENABLE_ECHO_INPUT
+        wincon::ENABLE_ECHO_INPUT,
     };
 
     unsafe {
-        let hstdin = GetStdHandle(STD_INPUT_HANDLE); 
+        let hstdin = GetStdHandle(STD_INPUT_HANDLE);
         let mut mode = 0u32;
         GetConsoleMode(hstdin, &mut mode);
 
-        if  !enable {
-            mode &= !ENABLE_ECHO_INPUT;
-        } else {
+        if enable {
             mode |= ENABLE_ECHO_INPUT;
+        } else {
+            mode &= !ENABLE_ECHO_INPUT;
         }
-        SetConsoleMode(hstdin, mode );
+        SetConsoleMode(hstdin, mode);
     }
 }

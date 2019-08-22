@@ -1,4 +1,4 @@
-use crate::terminal::is_tty;
+use crate::terminal::{init_console, is_tty};
 use std::env;
 use std::io;
 
@@ -18,6 +18,7 @@ pub struct RuntimeEnvironment {
 
 impl RuntimeEnvironment {
     pub fn new_from_process_env() -> RuntimeEnvironment {
+        init_console();
         let stdin = io::stdin();
         let stdout = io::stdout();
         let stderr = io::stderr();

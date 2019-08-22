@@ -4,7 +4,6 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::cli::BasicUI;
-use crate::terminal::TERMINAL_CLEAR_LINE;
 use crate::util;
 
 const PRINT_PERIOD: Duration = Duration::from_millis(100);
@@ -114,13 +113,8 @@ impl ProgressPrinter<'_> {
         }
 
         // Write the progress line
-        let s = format!(
-            "{}{}\r",
-            TERMINAL_CLEAR_LINE,
-            Self::format_progress_line(written_bytes, self.filesize, speed, eta),
-        );
-
-        self.ui.print(PROGRESS_VERBOSITY, s).ok();
+        let s = Self::format_progress_line(written_bytes, self.filesize, speed, eta);
+        self.ui.print_overwrite_line(PROGRESS_VERBOSITY, s).ok();
         self.printed_at_least_once = true;
     }
 
