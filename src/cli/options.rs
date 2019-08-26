@@ -1,3 +1,4 @@
+use crate::cli::credentials::define_credential_options;
 use crate::cli::DEFAULT_FILE_SUFFIX;
 use getopts::Options;
 
@@ -21,44 +22,8 @@ pub fn define_options() -> Options {
         )
         .optflagmulti("q", "quiet", "be quiet; skip unnecessary messages");
 
-    // Credentials
-    options
-        .optopt(
-            "",
-            "prompt-passwords",
-            "request N password(s) interactively from stdin; any one of them can decrypt the files",
-            "N",
-        )
-        .optmulti(
-            "",
-            "password-file",
-            "read password(s) from the file, one per line",
-            "FILENAME",
-        )
-        .optmulti(
-            "",
-            "symmetric-key",
-            "read 32-byte hex symmetric secret key(s) from the file, one per line",
-            "FILENAME",
-        )
-        .optmulti(
-            "",
-            "public-key",
-            "read public key(s) from the file, one per line",
-            "FILENAME",
-        )
-        .optmulti(
-            "",
-            "public-key-text",
-            "provide public key (64 hex chars) as a command line argument",
-            "PUBLIC_KEY",
-        )
-        .optmulti(
-            "",
-            "private-key",
-            "read private key(s) from the file, one per line",
-            "FILENAME",
-        );
+    // Credential options
+    options = define_credential_options(options);
 
     // Encryption/decryption flags
     options
@@ -81,14 +46,6 @@ pub fn define_options() -> Options {
             "s",
             "stdout",
             "write to standard output",
-        )
-        .optflag(
-            "",
-            "skip-checksum-check",
-            "don't check public keys for validity",
-        )
-        .optopt(
-            "", "threshold", "Number of keys required to decrypt the file", "NUM_KEYS"
         )
         .optopt(
             "S",

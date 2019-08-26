@@ -6,7 +6,8 @@ use failure::{bail, ensure, err_msg, Fallible, ResultExt};
 use prost::Message;
 use static_assertions::const_assert_eq;
 
-use crate::cli::{Credential, DecryptOptions, EncryptOptions};
+use crate::cli::{DecryptOptions, EncryptOptions};
+use crate::credentials::{ComplexCredential, Credential};
 use crate::crypto::{
     instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, BoxNonce, CryptoError,
     CryptoSystem, CryptoSystemRng, HMacKey, KdfSalt, PrivateKey, PublicKey, AEAD_MAC_LEN,
@@ -91,45 +92,6 @@ fn recipient_box_nonce(recipient_idx: usize) -> Box<BoxNonce> {
     nonce
 }
 
-fn encrypt_key_part_for_credential(
-    cryptosys: &dyn CryptoSystem,
-    ephemeral_pk: &PublicKey,
-    ephemeral_sk: &PrivateKey,
-    key_part: &[u8],
-    key_idx: usize,
-    credential: &Credential,
-) -> Fallible<EncryptedKeyParts> {
-    // AEAD and Box must increase the encrypted data size by the same number of bytes to avoid
-    // leaking information about the encryption method.
-    const_assert_eq!(AEAD_MAC_LEN, BOX_MAC_LEN);
-
-    let encrypted_key = match credential {
-        Credential::Password(_) | Credential::SymmetricKey(_) => {
-            let secret_key = recipient_secret_key(&*cryptosys, &ephemeral_pk, credential);
-            let nonce = recipient_secret_nonce(key_idx);
-
-            cryptosys.aead_encrypt_easy(&key_part, &secret_key, &nonce)
-        }
-        Credential::PublicKey(public_key) => {
-            let nonce = recipient_box_nonce(key_idx);
-            cryptosys.box_encrypt_easy(&key_part, public_key, ephemeral_sk, &nonce)?
-        }
-        Credential::PrivateKey(_) => {
-            panic!("Unexpected private key when encoding");
-        }
-    };
-
-    // NOTE: num_key_parts > 1 only makes sense for Shamir key sharing (when 1 < threshold < N)
-    // and should not be allowed for other cases.
-    let num_key_parts: usize = 1;
-
-    Ok(EncryptedKeyParts {
-        // Convert 1 to 0 to save space in serialized proto.
-        num_key_parts: if num_key_parts == 1 { 0 } else { num_key_parts } as u64,
-        key_data: Some(KeyData::EncryptedKeyData(encrypted_key)),
-    })
-}
-
 fn split_key_into_key_parts<R: rand::Rng + rand::CryptoRng>(
     key: &[u8],
     num_parts: usize,
@@ -166,6 +128,81 @@ fn split_key_into_key_parts<R: rand::Rng + rand::CryptoRng>(
     })
 }
 
+// Use 0 instead of 1 for `num_key_parts` and `threshold` fields in protobufs because it has the
+// same semantics, but saves space when serialized.
+fn one_to_zero(val: usize) -> u64 {
+    (if val == 1 { 0 } else { val } as u64)
+}
+
+fn encrypt_composite_key(
+    cryptosys: &dyn CryptoSystem,
+    ephemeral_pk: &PublicKey,
+    ephemeral_sk: &PrivateKey,
+    key: &[u8],
+    cred: &ComplexCredential,
+    key_idx: &mut usize,
+) -> Fallible<CompositeKey> {
+    let rng = &mut CryptoSystemRng::new(cryptosys);
+    let mut key_parts: &[Vec<u8>] =
+        &split_key_into_key_parts(key, cred.num_shares, cred.threshold, rng)?;
+
+    let encrypted_key_parts = cred
+        .sub_creds
+        .iter()
+        .map(|(num_shares, credential)| -> Fallible<EncryptedKeyParts> {
+            let (key_part, new_key_parts) = key_parts.split_at(*num_shares);
+            key_parts = new_key_parts;
+            let key_part = key_part.concat();
+
+            let key_data = match credential {
+                Credential::Password(_) | Credential::SymmetricKey(_) => {
+                    let secret_key = recipient_secret_key(&*cryptosys, &ephemeral_pk, credential);
+                    let nonce = recipient_secret_nonce(*key_idx);
+                    *key_idx += 1;
+
+                    KeyData::EncryptedKeyData(cryptosys.aead_encrypt_easy(
+                        &key_part,
+                        &secret_key,
+                        &nonce,
+                    ))
+                }
+                Credential::PublicKey(public_key) => {
+                    const_assert_eq!(AEAD_MAC_LEN, BOX_MAC_LEN);
+                    let nonce = recipient_box_nonce(*key_idx);
+                    *key_idx += 1;
+                    KeyData::EncryptedKeyData(cryptosys.box_encrypt_easy(
+                        &key_part,
+                        public_key,
+                        ephemeral_sk,
+                        &nonce,
+                    )?)
+                }
+                Credential::PrivateKey(_) => {
+                    panic!("Unexpected private key when encoding");
+                }
+                Credential::Complex(cred) => KeyData::CompositeKey(encrypt_composite_key(
+                    cryptosys,
+                    ephemeral_pk,
+                    ephemeral_sk,
+                    &key_part,
+                    cred,
+                    key_idx,
+                )?),
+            };
+
+            Ok(EncryptedKeyParts {
+                num_key_parts: one_to_zero(*num_shares),
+                key_data: Some(key_data),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(CompositeKey {
+        threshold: one_to_zero(cred.threshold),
+        key_parts: encrypted_key_parts,
+    })
+}
+
 pub fn encrypt_header(
     opts: &EncryptOptions,
 ) -> Fallible<(Vec<u8>, Box<dyn StreamConverter>, usize)> {
@@ -173,7 +210,6 @@ pub fn encrypt_header(
 
     let crypto_family = cryptofamily_from_opts(&opts);
     let cryptosys = cryptosys_from_proto(&crypto_family)?;
-    let key_threshold = opts.key_threshold.unwrap_or(1);
 
     let chunk_size = DEFAULT_CHUNK_SIZE;
     ensure!(
@@ -199,38 +235,15 @@ pub fn encrypt_header(
         ENCRYPTED_HEADER_NONCE,
     );
 
-    // Key parts
-    let key_parts = split_key_into_key_parts(
+    // Encrypt payload key
+    let encrypted_payload_key = encrypt_composite_key(
+        &*cryptosys,
+        &ephemeral_pk,
+        &ephemeral_sk,
         &*payload_key,
-        opts.credentials.len(),
-        key_threshold,
-        &mut CryptoSystemRng::new(&*cryptosys),
+        &opts.credential,
+        &mut 0,
     )?;
-
-    let encrypted_key_parts = opts
-        .credentials
-        .iter()
-        .zip(key_parts)
-        .enumerate()
-        .map(|(key_idx, (credential, key_part))| {
-            encrypt_key_part_for_credential(
-                &*cryptosys,
-                &ephemeral_pk,
-                &ephemeral_sk,
-                &key_part,
-                key_idx,
-                &credential,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Note, we currently use just a simple one-level CompositeKey. In the future we'll allow users
-    // to define much more complex setups.
-    let encrypted_payload_key = CompositeKey {
-        // Use 0 instead of 1 because it has the same semantics, but saves space when serialized.
-        threshold: if key_threshold == 1 { 0 } else { key_threshold } as u64,
-        key_parts: encrypted_key_parts,
-    };
 
     // Gather all the data and create FileHeader
     let header = FileHeader {
@@ -288,6 +301,9 @@ fn decryptor_from_credential<'a>(
                 }
             },
         ),
+        Credential::Complex(_) => {
+            panic!("Unexpected complex key when decoding");
+        }
     }
 }
 

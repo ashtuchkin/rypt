@@ -1,14 +1,9 @@
 # P0
- * CLI: Ask to delete files at the end
-   * Only if terminal attached; otherwise don't delete
-   * Command line flags to skip the question: -k, --keep-original-files; -r, --remove-original-files
- * CLI: Add ability to create complex key schemes (major selling point)
  * CLI: Create consistent verbose/quiet rules
    * Default to rather verbose if in terminal; further verbose should print details of algorithms, etc
  * CLI: Polish help and messages
    * Explain file mode/stream mode
  * CLI: Exit code should signify error if at least one file fails.
- * CLI: Don't accept empty password.
  * Finalize 'version' field handling
  * Review header size limitation
  * Check carefully decoding path, with the assumption that attacker changes it.
@@ -21,6 +16,7 @@
       Convert all these errors to warnings.
  * Tests
     * Review the code and cover most sensitive areas.
+    * header.rs
     * Test password handling
     * If target file already exists, error and skip.
     * delete the output file on error or if interrupted (ctrl-c)
@@ -32,6 +28,7 @@
    * Add gifs that show how command works
    * Add info about composite keys to INTERNALS
    * Crypto details, performance, usage, arguments.
+   * "Access Structure"
  * Set up basic packaging, see nice overview here https://rust-lang-nursery.github.io/cli-wg/tutorial/packaging.html
    https://github.com/japaric/trust
  * Publish to /r/rust, hacker news.
@@ -57,7 +54,6 @@
  * Review error messages to be precise about what really happened (i.e. include file name).
  * Add benchmarking
  * Use MUSL for wider linux support
- * Add Windows support
 
 # P2
  * Write a blog post about pipelining and compare it to a naive serial solution.
@@ -94,6 +90,7 @@
    * Allow situation when plaintext and password are on tty ('rypt > abc' and 'rypt -sd abc').
      * In both cases, progress bar should not be shown.
    * Don't delete existing output files on error.
+   * Keep/delete files on success.
 
  * Exit with error code 1 when there are en/decryption errors.
  * Support "warnings" (e.g. when skipping file) and exit with exit code = 2 if any. 

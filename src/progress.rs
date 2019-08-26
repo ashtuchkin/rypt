@@ -3,7 +3,7 @@ use std::iter::FromIterator;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::cli::BasicUI;
+use crate::ui::UI;
 use crate::util;
 
 const PRINT_PERIOD: Duration = Duration::from_millis(100);
@@ -14,7 +14,7 @@ const KEEP_STAMPS_COUNT: usize =
 const PROGRESS_VERBOSITY: i32 = 1;
 
 pub struct ProgressPrinter<'a> {
-    ui: &'a BasicUI,
+    ui: &'a dyn UI,
     do_print: bool,
     start_time: Instant,
     stamps: VecDeque<(Instant, usize)>,
@@ -25,7 +25,7 @@ pub struct ProgressPrinter<'a> {
 }
 
 impl ProgressPrinter<'_> {
-    pub fn new(ui: &BasicUI, force_silence: bool) -> ProgressPrinter<'_> {
+    pub fn new(ui: &dyn UI, force_silence: bool) -> ProgressPrinter<'_> {
         let now = Instant::now();
         ProgressPrinter {
             ui,
@@ -55,7 +55,7 @@ impl ProgressPrinter<'_> {
             path = "(stdin)".into();
         }
         let s = format!("{} ({}/{})", path, file_idx + 1, total_files);
-        self.ui.println(PROGRESS_VERBOSITY, s).ok();
+        self.ui.println(PROGRESS_VERBOSITY, &s).ok();
     }
 
     pub fn print_progress(&mut self, written_bytes: usize) {
@@ -114,7 +114,7 @@ impl ProgressPrinter<'_> {
 
         // Write the progress line
         let s = Self::format_progress_line(written_bytes, self.filesize, speed, eta);
-        self.ui.print_overwrite_line(PROGRESS_VERBOSITY, s).ok();
+        self.ui.print_overwrite_line(PROGRESS_VERBOSITY, &s).ok();
         self.printed_at_least_once = true;
     }
 

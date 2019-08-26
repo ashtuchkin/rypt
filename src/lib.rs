@@ -5,8 +5,8 @@
 use failure::Fallible;
 
 use crate::cli::{
-    parse_command_line, print_help, print_version, BasicUI, Command, CryptDirectionOpts,
-    CryptOptions, InputCleanupPolicy,
+    parse_command_line, print_help, print_version, Command, CryptDirectionOpts, CryptOptions,
+    InputCleanupPolicy,
 };
 pub use crate::errors::EarlyTerminationError;
 use crate::header::{decrypt_header, encrypt_header};
@@ -15,8 +15,10 @@ use crate::io_streams::InputOutputStream;
 use crate::key_management::generate_key_pair_files;
 use crate::progress::ProgressPrinter;
 pub use crate::runtime_env::{Reader, RuntimeEnvironment, Writer};
+use crate::ui::UI;
 
 pub mod cli;
+mod credentials;
 mod crypto;
 mod errors;
 mod header;
@@ -31,13 +33,14 @@ mod stream_crypto;
 mod stream_pipeline;
 mod terminal;
 mod types;
+mod ui;
 pub mod util;
 
 fn crypt_streams(
     io_streams: Vec<InputOutputStream>,
     opts: &CryptOptions,
     direction: &CryptDirectionOpts,
-    ui: &BasicUI,
+    ui: &dyn UI,
 ) -> Fallible<()> {
     let total_files = io_streams.len();
     let mut success_cleanup_cbs = vec![];
@@ -49,7 +52,7 @@ fn crypt_streams(
         let res = (|| {
             let InputOutputStream { input, output } = io_stream;
 
-            let mut progress_printer = ProgressPrinter::new(&ui, opts.plaintext_on_tty);
+            let mut progress_printer = ProgressPrinter::new(ui, opts.plaintext_on_tty);
             progress_printer.print_file_header(&input.path(), file_idx, total_files);
 
             let output = output?;
@@ -122,12 +125,12 @@ fn crypt_streams(
     Ok(())
 }
 
-pub fn run_command(command: Command, ui: &BasicUI) -> Fallible<()> {
+pub fn run_command(command: Command, ui: &dyn UI) -> Fallible<()> {
     match command {
         Command::CryptStreams(streams, opts, direction) => {
-            crypt_streams(streams, &opts, &direction, &ui)
+            crypt_streams(streams, &opts, &direction, ui)
         }
-        Command::GenerateKeyPair(opts) => generate_key_pair_files(opts.streams, &ui),
+        Command::GenerateKeyPair(opts) => generate_key_pair_files(opts.streams, ui),
         Command::Help(output, program_name) => print_help(output, &program_name),
         Command::Version(output) => print_version(output),
     }

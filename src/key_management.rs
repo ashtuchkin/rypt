@@ -1,10 +1,11 @@
 use failure::{Fallible, ResultExt};
 use std::io::Write;
 
-use crate::cli::{BasicUI, KeyPairOutputStreams};
+use crate::cli::KeyPairOutputStreams;
+use crate::ui::UI;
 use crate::{crypto, util};
 
-pub fn generate_key_pair_files(streams: Vec<KeyPairOutputStreams>, ui: &BasicUI) -> Fallible<()> {
+pub fn generate_key_pair_files(streams: Vec<KeyPairOutputStreams>, ui: &dyn UI) -> Fallible<()> {
     let cryptosys = crypto::instantiate_crypto_system(Default::default())?;
     let total_num = streams.len();
     for (file_idx, streams) in streams.into_iter().enumerate() {
@@ -37,7 +38,7 @@ pub fn generate_key_pair_files(streams: Vec<KeyPairOutputStreams>, ui: &BasicUI)
                 format!("    Private key file: {}\n\n", private_key_path),
             ]
             .concat();
-            ui.print(1, s)?;
+            ui.print(1, &s)?;
         }
 
         // Write private key

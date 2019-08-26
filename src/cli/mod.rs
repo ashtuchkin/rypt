@@ -1,31 +1,28 @@
 use failure::Fallible;
 use getopts::Matches;
 
-use crate::cli::credentials::get_credentials;
+use crate::cli::credentials::{get_decrypt_credentials, get_encrypt_credential};
+pub use crate::cli::help::{print_help, print_version};
 use crate::cli::io_streams::get_input_output_streams;
 use crate::cli::key_management::get_keypair_streams;
 use crate::cli::options::define_options;
+use crate::credentials::{ComplexCredential, Credential};
 use crate::io_streams::{InputOutputStream, OutputStream};
 use crate::runtime_env::RuntimeEnvironment;
-
-pub use crate::cli::credentials::Credential;
-pub use crate::cli::help::{print_help, print_version};
-pub use crate::cli::ui::BasicUI;
+use crate::ui::{BasicUI, UI};
 
 mod credentials;
 mod help;
 mod io_streams;
 mod key_management;
 mod options;
-mod ui;
 
 pub const DEFAULT_FILE_SUFFIX: &str = "rypt";
 
 #[derive(Debug)]
 pub struct EncryptOptions {
-    pub credentials: Vec<Credential>,
+    pub credential: ComplexCredential,
     pub fast_aead_algorithm: bool,
-    pub key_threshold: Option<usize>,
     pub associated_data: Vec<u8>,
 }
 
@@ -129,7 +126,7 @@ pub fn parse_command_line(
         stdout_is_tty,
         stderr_is_tty,
     }: RuntimeEnvironment,
-) -> Fallible<(Command, BasicUI)> {
+) -> Fallible<(Command, impl UI)> {
     let mut ui = BasicUI::from_streams(&program_name, stdin, stdin_is_tty, stderr, stderr_is_tty);
 
     let command_res = (|| -> Fallible<Command> {
@@ -160,8 +157,6 @@ pub fn parse_command_line(
                     stdout_is_tty,
                 )?;
 
-                let credentials = get_credentials(&matches, crypt_direction, &ui)?;
-
                 let input_cleanup_policy = if matches.opt_present("keep-input-files") {
                     InputCleanupPolicy::KeepFiles
                 } else if matches.opt_present("delete-input-files") {
@@ -180,14 +175,13 @@ pub fn parse_command_line(
                     },
                     match crypt_direction {
                         CryptDirection::Encrypt => CryptDirectionOpts::Encrypt(EncryptOptions {
-                            credentials,
+                            credential: get_encrypt_credential(&matches, &ui)?,
                             fast_aead_algorithm: matches.opt_present("fast"),
                             associated_data: vec![],
-                            key_threshold: matches.opt_get("threshold")?,
                         }),
-                        CryptDirection::Decrypt => {
-                            CryptDirectionOpts::Decrypt(DecryptOptions { credentials })
-                        }
+                        CryptDirection::Decrypt => CryptDirectionOpts::Decrypt(DecryptOptions {
+                            credentials: get_decrypt_credentials(&matches, &ui)?,
+                        }),
                     },
                 )
             }

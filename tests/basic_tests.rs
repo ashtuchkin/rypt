@@ -203,7 +203,7 @@ fn threshold_encrypt_decrypt() -> Fallible<()> {
 
     // 3. Encrypt the file using 5 passwords with 3 password threshold
     let mut args = vec![
-        "--threshold",
+        "--key-threshold",
         "3",
         "--delete-input-files",
         temp_file_path.to_str().unwrap(),
@@ -278,7 +278,7 @@ fn max_threshold_encrypt_decrypt() -> Fallible<()> {
 
     // 3. Encrypt the file using 5 passwords with all 5 password threshold
     let mut args = vec![
-        "--threshold",
+        "--key-threshold",
         "5",
         "--delete-input-files",
         temp_file_path.to_str().unwrap(),
