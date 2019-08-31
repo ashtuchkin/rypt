@@ -2,7 +2,7 @@ use failure::{ensure, Fallible};
 use getopts::Matches;
 use std::path::PathBuf;
 
-use crate::cli::KeyPairOutputStreams;
+use crate::commands::KeyPairOutputStreams;
 use crate::io_streams::{OpenWriterCb, OutputStream};
 
 pub fn get_keypair_streams(

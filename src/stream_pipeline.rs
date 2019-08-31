@@ -4,7 +4,7 @@ use std::thread;
 use crossbeam_channel::{Receiver, SendError, Sender};
 use failure::{bail, Fallible};
 
-use crate::{Reader, Writer};
+use crate::runtime_env::{Reader, Writer};
 
 const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in channels.
 

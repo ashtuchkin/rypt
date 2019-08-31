@@ -2,76 +2,23 @@ use failure::Fallible;
 use getopts::Matches;
 
 use crate::cli::credentials::{get_decrypt_credentials, get_encrypt_credential};
-pub use crate::cli::help::{print_help, print_version};
 use crate::cli::io_streams::get_input_output_streams;
 use crate::cli::key_management::get_keypair_streams;
-use crate::cli::options::define_options;
-use crate::credentials::{ComplexCredential, Credential};
-use crate::io_streams::{InputOutputStream, OutputStream};
+pub use crate::cli::options::define_options;
+use crate::commands::{
+    Command, CryptDirectionOpts, CryptOptions, DecryptOptions, EncryptOptions,
+    GenerateKeyPairOptions, InputCleanupPolicy,
+};
+use crate::io_streams::OutputStream;
 use crate::runtime_env::RuntimeEnvironment;
 use crate::ui::{BasicUI, UI};
 
 mod credentials;
-mod help;
 mod io_streams;
 mod key_management;
 mod options;
 
 pub const DEFAULT_FILE_SUFFIX: &str = "rypt";
-
-#[derive(Debug)]
-pub struct EncryptOptions {
-    pub credential: ComplexCredential,
-    pub fast_aead_algorithm: bool,
-    pub associated_data: Vec<u8>,
-}
-
-#[derive(Debug)]
-pub struct DecryptOptions {
-    pub credentials: Vec<Credential>,
-}
-
-#[derive(Debug)]
-pub enum CryptDirectionOpts {
-    Encrypt(EncryptOptions),
-    Decrypt(DecryptOptions),
-}
-
-#[derive(Debug)]
-pub enum InputCleanupPolicy {
-    KeepFiles,
-    DeleteFiles,
-    PromptUser,
-}
-
-#[derive(Debug)]
-pub struct CryptOptions {
-    // Whether we keep or delete input files after successful encryption/decryption.
-    pub input_cleanup_policy: InputCleanupPolicy,
-
-    // Whether plaintext is entered on TTY when encrypting or printed to TTY when decrypting.
-    // Currently makes ProgressPrinter quiet, so that the text is not garbled.
-    pub plaintext_on_tty: bool,
-}
-
-#[derive(Debug)]
-pub struct KeyPairOutputStreams {
-    pub public_key_stream: Option<OutputStream>,
-    pub private_key_stream: OutputStream,
-}
-
-#[derive(Debug)]
-pub struct GenerateKeyPairOptions {
-    pub streams: Vec<KeyPairOutputStreams>,
-}
-
-#[derive(Debug)]
-pub enum Command {
-    CryptStreams(Vec<InputOutputStream>, CryptOptions, CryptDirectionOpts),
-    GenerateKeyPair(GenerateKeyPairOptions),
-    Help(OutputStream, String),
-    Version(OutputStream),
-}
 
 #[derive(Clone, Copy, PartialEq)]
 enum CryptDirection {

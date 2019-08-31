@@ -1,4 +1,4 @@
-use crate::cli::options::define_options;
+use crate::cli::define_options;
 use crate::io_streams::OutputStream;
 use failure::Fallible;
 

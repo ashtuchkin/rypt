@@ -1,0 +1,76 @@
+use crate::commands::crypt::crypt_streams;
+use crate::commands::gen_keys::generate_key_pair_files;
+use crate::commands::help::{print_help, print_version};
+use crate::credentials::{ComplexCredential, Credential};
+use crate::io_streams::{InputOutputStream, OutputStream};
+use crate::ui::UI;
+use failure::Fallible;
+
+mod crypt;
+mod gen_keys;
+mod help;
+
+#[derive(Debug)]
+pub enum Command {
+    CryptStreams(Vec<InputOutputStream>, CryptOptions, CryptDirectionOpts),
+    GenerateKeyPair(GenerateKeyPairOptions),
+    Help(OutputStream, String),
+    Version(OutputStream),
+}
+
+#[derive(Debug)]
+pub struct EncryptOptions {
+    pub credential: ComplexCredential,
+    pub fast_aead_algorithm: bool,
+    pub associated_data: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct DecryptOptions {
+    pub credentials: Vec<Credential>,
+}
+
+#[derive(Debug)]
+pub enum CryptDirectionOpts {
+    Encrypt(EncryptOptions),
+    Decrypt(DecryptOptions),
+}
+
+#[derive(Debug)]
+pub enum InputCleanupPolicy {
+    KeepFiles,
+    DeleteFiles,
+    PromptUser,
+}
+
+#[derive(Debug)]
+pub struct CryptOptions {
+    // Whether we keep or delete input files after successful encryption/decryption.
+    pub input_cleanup_policy: InputCleanupPolicy,
+
+    // Whether plaintext is entered on TTY when encrypting or printed to TTY when decrypting.
+    // Currently makes ProgressPrinter quiet, so that the text is not garbled.
+    pub plaintext_on_tty: bool,
+}
+
+#[derive(Debug)]
+pub struct KeyPairOutputStreams {
+    pub public_key_stream: Option<OutputStream>,
+    pub private_key_stream: OutputStream,
+}
+
+#[derive(Debug)]
+pub struct GenerateKeyPairOptions {
+    pub streams: Vec<KeyPairOutputStreams>,
+}
+
+pub fn run_command(command: Command, ui: &dyn UI) -> Fallible<()> {
+    match command {
+        Command::CryptStreams(streams, opts, direction) => {
+            crypt_streams(streams, &opts, &direction, ui)
+        }
+        Command::GenerateKeyPair(opts) => generate_key_pair_files(opts.streams, ui),
+        Command::Help(output, program_name) => print_help(output, &program_name),
+        Command::Version(output) => print_version(output),
+    }
+}

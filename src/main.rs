@@ -1,16 +1,17 @@
-use rypt::{self, RuntimeEnvironment};
+use rypt::{self, RuntimeEnvironment, UI};
 
 fn main() {
-    let runtime_env = RuntimeEnvironment::new_from_process_env();
+    let env = RuntimeEnvironment::new_from_process_env();
 
-    let res = rypt::run(runtime_env);
-
-    if let Err(_err) = res {
-        //        let mut stderr = runtime_env.stderr.borrow_mut();
-        //        match err.downcast::<EarlyTerminationError>() {
-        //            Ok(_) => (), // Don't print anything in case of early termination
-        //            Err(err) => writeln!(stderr, "{}: {}", rypt::PKG_NAME, err).unwrap_or(()),
-        //        }
+    // 1. Parse command line. In case of an error, it'll print it using ui.print_error, so we just
+    // need to exit.
+    if let Ok((command, ui)) = rypt::cli::parse_command_line(env) {
+        // 2. Run the command. Here we print the error using UI explicitly.
+        if let Err(err) = rypt::commands::run_command(command, &ui) {
+            ui.print_error(&err).ok();
+            std::process::exit(1);
+        }
+    } else {
         std::process::exit(1);
     }
 }

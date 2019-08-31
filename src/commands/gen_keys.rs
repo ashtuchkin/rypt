@@ -1,7 +1,7 @@
 use failure::{Fallible, ResultExt};
 use std::io::Write;
 
-use crate::cli::KeyPairOutputStreams;
+use crate::commands::KeyPairOutputStreams;
 use crate::ui::UI;
 use crate::{crypto, util};
 

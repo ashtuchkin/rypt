@@ -3,9 +3,9 @@ use std::cell::{RefCell, RefMut};
 use std::io::Read;
 use std::rc::Rc;
 
+use crate::runtime_env::{Reader, Writer};
 use crate::terminal::{set_stdin_echo, TERMINAL_CLEAR_LINE};
 use crate::util::to_hex_string;
-use crate::{Reader, Writer};
 
 // User interaction interface.
 pub trait UI {
@@ -99,7 +99,7 @@ impl UI for BasicUI {
 
     fn print(&self, verbosity: i32, message: &str) -> Fallible<()> {
         if self.will_print(verbosity) {
-            self.output.borrow_mut().write(message.as_bytes())?;
+            self.output.borrow_mut().write_all(message.as_bytes())?;
         }
         Ok(())
     }
@@ -135,7 +135,7 @@ impl UI for BasicUI {
                 Ok(valid_char) => {
                     match valid_char {
                         "\n" => {
-                            if res.ends_with("\r") {
+                            if res.ends_with('\r') {
                                 res.pop(); // Handle Windows CRLF.
                             }
                             return Ok(res);
@@ -207,7 +207,7 @@ pub mod test_helpers {
             let lines = message.lines().collect::<Vec<_>>();
             let lines_len = lines.len();
             let mut line_tuples = lines.into_iter().enumerate().map(|(idx, line)| {
-                let line_finished = idx < lines_len - 1 || message.ends_with("\n");
+                let line_finished = idx < lines_len - 1 || message.ends_with('\n');
                 (typ, line.to_string(), line_finished)
             });
 
@@ -257,7 +257,7 @@ pub mod test_helpers {
                 .prompt_replies
                 .borrow_mut()
                 .pop_front()
-                .expect(&format!("Unexpected prompt in TestUI: '{}'", prompt));
+                .unwrap_or_else(|| panic!("Unexpected prompt in TestUI: '{}'", prompt));
 
             if let Some(matcher) = matcher {
                 assert!(

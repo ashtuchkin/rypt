@@ -6,7 +6,7 @@ use failure::{bail, ensure, err_msg, Fallible, ResultExt};
 use prost::Message;
 use static_assertions::const_assert_eq;
 
-use crate::cli::{DecryptOptions, EncryptOptions};
+use crate::commands::{DecryptOptions, EncryptOptions};
 use crate::credentials::{ComplexCredential, Credential};
 use crate::crypto::{
     instantiate_crypto_system, AEADAlgorithm, AEADKey, AEADNonce, BoxNonce, CryptoError,
