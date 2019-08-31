@@ -32,7 +32,6 @@ mod shamir;
 mod stream_crypto;
 mod stream_pipeline;
 mod terminal;
-mod types;
 mod ui;
 pub mod util;
 

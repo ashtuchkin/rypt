@@ -4,10 +4,27 @@ use std::thread;
 use crossbeam_channel::{Receiver, SendError, Sender};
 use failure::{bail, Fallible};
 
-use crate::types::{Chunk, ChunkConfig, StreamConverter};
 use crate::{Reader, Writer};
 
 const NUM_CHUNKS_IN_PIPELINE: usize = 6; // 3 being worked on and 3 waiting in channels.
+
+#[derive(Debug)]
+pub struct Chunk {
+    pub buffer: Vec<u8>,
+    pub is_last_chunk: bool,
+    pub chunk_idx: u64, // Chunk consecutive number, starting from 0.
+}
+
+#[derive(Debug)]
+pub struct ChunkConfig {
+    pub input_chunk_asize: usize, // Additional size to reserve for input chunks
+    pub output_chunk_asize: usize, // Additional size to reserve for output chunks (wrt input offset)
+}
+
+pub trait StreamConverter: Send {
+    fn get_chunk_config(&self) -> ChunkConfig;
+    fn convert_chunk(&mut self, chunk: Chunk) -> Fallible<Chunk>;
+}
 
 /// This function reads data from input_stream, converts it using stream_converter and then writes
 /// converted data to write_stream. It blocks until the data is fully read, converted and written.

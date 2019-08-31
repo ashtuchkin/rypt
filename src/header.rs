@@ -21,7 +21,7 @@ use crate::proto::rypt::{
 };
 use crate::shamir::{self, SecretShareError};
 use crate::stream_crypto::CryptoSystemAEADCodec;
-use crate::types::StreamConverter;
+use crate::stream_pipeline::StreamConverter;
 use crate::util::{serialize_proto, xor_vec};
 
 const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
