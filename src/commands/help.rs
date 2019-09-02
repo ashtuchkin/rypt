@@ -1,10 +1,7 @@
 use crate::cli::define_options;
 use crate::io_streams::OutputStream;
+use crate::{PKG_NAME, PKG_VERSION};
 use failure::Fallible;
-
-// See https://stackoverflow.com/a/27841363 for the full list.
-const PKG_NAME: &str = env!("CARGO_PKG_NAME");
-const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn print_help(output: OutputStream, program_name: &str) -> Fallible<()> {
     let options = define_options();

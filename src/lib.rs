@@ -26,3 +26,7 @@ pub type Reader = Box<dyn std::io::Read + Send>;
 pub type Writer = Box<dyn std::io::Write + Send>;
 pub type ReaderFactory = Box<dyn FnOnce() -> Fallible<Reader>>;
 pub type WriterFactory = Box<dyn FnOnce() -> Fallible<Writer>>;
+
+// See https://stackoverflow.com/a/27841363 for the full list.
+pub const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+pub const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");

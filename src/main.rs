@@ -21,9 +21,12 @@ fn main() {
     let stderr: Writer = Box::new(stderr);
 
     // Get program name and command line args
-    let mut args = std::env::args();
-    let program_name = args.next().unwrap_or_else(|| "rypt".into());
-    let cmdline_args: Vec<String> = args.collect();
+    let mut args = std::env::args_os();
+    let program_name = args
+        .next()
+        .and_then(|s| s.into_string().ok())
+        .unwrap_or_else(|| rypt::PKG_NAME.into());
+    let cmdline_args = args.collect::<Vec<_>>();
 
     // Create a terminal UI structure that is responsible for printing messages/errors and prompting
     // user for information like passwords. Initially it owns both Stdin and Stderr, but later
