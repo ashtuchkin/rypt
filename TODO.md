@@ -34,7 +34,6 @@
  * Publish to /r/rust, hacker news.
  
 # P1
- * Show whether AES256 is supported on this platform in --version command.
  * Handle panics gracefully, redirecting users to report bugs.
  * Weak password warning, using zxcvbn. Can be reentered by pressing 'Enter' on password verify.
  * Add CLI commands to set and show non-encrypted authenticated data, with or without password.

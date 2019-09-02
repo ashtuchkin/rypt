@@ -1,4 +1,5 @@
 use crate::cli::define_options;
+use crate::crypto::LibSodiumCryptoSystem;
 use crate::io_streams::OutputStream;
 use crate::{PKG_NAME, PKG_VERSION};
 use failure::Fallible;
@@ -26,8 +27,6 @@ Home page and documentation: <https://github.com/ashtuchkin/rypt>",
 pub fn print_version(output: OutputStream) -> Fallible<()> {
     let mut stdout = output.open()?;
     writeln!(stdout, "{} {}", PKG_NAME, PKG_VERSION)?;
-    let libsodium_version =
-        unsafe { std::ffi::CStr::from_ptr(libsodium_sys::sodium_version_string()) };
-    writeln!(stdout, "libsodium {}", libsodium_version.to_str()?)?;
+    writeln!(stdout, "libsodium {}", LibSodiumCryptoSystem::version())?;
     Ok(())
 }

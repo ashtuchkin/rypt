@@ -1,5 +1,4 @@
-pub use crate::crypto::libsodium::AEADAlgorithm;
-use crate::crypto::libsodium::LibSodiumCryptoSystem;
+pub use crate::crypto::libsodium::{AEADAlgorithm, LibSodiumCryptoSystem};
 pub use crate::crypto::rng::CryptoSystemRng;
 use failure::Fail;
 use std::convert::TryInto;
