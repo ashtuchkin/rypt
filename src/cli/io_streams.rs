@@ -5,14 +5,15 @@ use failure::{bail, ensure, Fallible};
 use getopts::Matches;
 
 use crate::cli::{CryptDirection, DEFAULT_FILE_SUFFIX};
-use crate::io_streams::{InputOutputStream, InputStream, OpenReaderCb, OpenWriterCb, OutputStream};
+use crate::io_streams::{InputOutputStream, InputStream, OutputStream};
+use crate::{ReaderFactory, WriterFactory};
 
 pub(super) fn get_input_output_streams(
     matches: &Matches,
     crypt_direction: CryptDirection,
-    open_stdin: OpenReaderCb,
+    open_stdin: ReaderFactory,
     stdin_is_tty: bool,
-    open_stdout: OpenWriterCb,
+    open_stdout: WriterFactory,
     stdout_is_tty: bool,
 ) -> Fallible<(Vec<InputOutputStream>, bool)> {
     let stream_mode = matches.opt_present("s") || matches.free.is_empty() || matches.free == ["-"];

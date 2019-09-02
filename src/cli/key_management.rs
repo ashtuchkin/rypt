@@ -3,11 +3,12 @@ use getopts::Matches;
 use std::path::PathBuf;
 
 use crate::commands::KeyPairOutputStreams;
-use crate::io_streams::{OpenWriterCb, OutputStream};
+use crate::io_streams::OutputStream;
+use crate::WriterFactory;
 
 pub fn get_keypair_streams(
     matches: &Matches,
-    open_stdout: OpenWriterCb,
+    open_stdout: WriterFactory,
 ) -> Fallible<Vec<KeyPairOutputStreams>> {
     ensure!(
         !matches.free.is_empty(),

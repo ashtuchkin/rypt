@@ -9,8 +9,9 @@ use crate::commands::{
     Command, CryptDirectionOpts, CryptOptions, DecryptOptions, EncryptOptions,
     GenerateKeyPairOptions, InputCleanupPolicy,
 };
-use crate::io_streams::{OpenReaderCb, OpenWriterCb, OutputStream};
+use crate::io_streams::OutputStream;
 use crate::ui::UI;
+use crate::{ReaderFactory, WriterFactory};
 use std::ffi::OsStr;
 
 mod credentials;
@@ -60,9 +61,9 @@ fn get_mode(matches: &Matches) -> OperationMode {
 
 pub fn parse_command_line(
     cmdline_args: &[impl AsRef<OsStr>],
-    open_stdin: OpenReaderCb,
+    open_stdin: ReaderFactory,
     stdin_is_tty: bool,
-    open_stdout: OpenWriterCb,
+    open_stdout: WriterFactory,
     stdout_is_tty: bool,
     ui: &mut dyn UI,
 ) -> Fallible<Command> {

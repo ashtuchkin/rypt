@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::terminal::{set_stdin_echo, TERMINAL_CLEAR_LINE};
 use crate::util::to_hex_string;
-use crate::{Reader, Writer};
+use crate::{Reader, ReaderFactory, Writer};
 
 // User interaction interface.
 pub trait UI {
@@ -71,7 +71,7 @@ pub struct BasicUI {
 }
 
 impl BasicUI {
-    pub fn from_streams(
+    pub fn new(
         program_name: String,
         input: Reader,
         input_is_tty: bool,
@@ -88,8 +88,12 @@ impl BasicUI {
         }
     }
 
-    pub fn ref_input_opt(&mut self) -> Rc<RefCell<Option<Reader>>> {
-        Rc::clone(&self.input)
+    // Create a function that extracts input stream from this struct, returning it to the caller.
+    // After returned function is called, this struct loses input stream and with it the ability to
+    // prompt user for input/passwords.
+    pub fn input_stream_extractor(&mut self) -> ReaderFactory {
+        let input = Rc::clone(&self.input);
+        Box::new(move || Ok(input.borrow_mut().take().unwrap()))
     }
 }
 

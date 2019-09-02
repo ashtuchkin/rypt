@@ -2,10 +2,7 @@ use failure::{Fallible, ResultExt};
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
-use crate::{Reader, Writer};
-
-pub type OpenReaderCb = Box<dyn FnOnce() -> Fallible<Reader>>;
-pub type OpenWriterCb = Box<dyn FnOnce() -> Fallible<Writer>>;
+use crate::{Reader, ReaderFactory, Writer, WriterFactory};
 
 pub enum InputStream {
     // Real file (assume we can delete it, get its size, etc).
@@ -13,7 +10,7 @@ pub enum InputStream {
     // File-like object in the filesystem. No assumptions except that we can open it for reading.
     FileStream { path: PathBuf },
     // Process stdin
-    Stdin { open_stdin: OpenReaderCb },
+    Stdin { open_stdin: ReaderFactory },
 }
 
 impl InputStream {
@@ -91,7 +88,7 @@ pub enum OutputStream {
     // Real file created by us (assume we can delete it, etc)
     File { path: PathBuf },
     // Process stdout
-    Stdout { open_stdout: OpenWriterCb },
+    Stdout { open_stdout: WriterFactory },
 }
 
 impl OutputStream {
