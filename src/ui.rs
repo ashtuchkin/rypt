@@ -13,7 +13,7 @@ pub trait UI {
     fn set_verbosity(&mut self, verbosity: i32);
 
     // Environment information
-    fn program_name(&self) -> &'_ str;
+    fn program_name(&self) -> &str;
 
     // Write/Print interface
     fn will_print(&self, verbosity: i32) -> bool;
@@ -102,7 +102,7 @@ impl UI for BasicUI {
         self.verbose = verbose;
     }
 
-    fn program_name(&self) -> &'_ str {
+    fn program_name(&self) -> &str {
         &self.program_name
     }
 
