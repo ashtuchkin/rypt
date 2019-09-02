@@ -14,7 +14,7 @@ mod help;
 pub enum Command {
     CryptStreams(Vec<InputOutputStream>, CryptOptions, CryptDirectionOpts),
     GenerateKeyPair(GenerateKeyPairOptions),
-    Help(OutputStream, String),
+    Help(OutputStream),
     Version(OutputStream),
 }
 
@@ -70,7 +70,7 @@ pub fn run_command(command: Command, ui: &dyn UI) -> Fallible<()> {
             crypt_streams(streams, &opts, &direction, ui)
         }
         Command::GenerateKeyPair(opts) => generate_key_pair_files(opts.streams, ui),
-        Command::Help(output, program_name) => print_help(output, &program_name),
+        Command::Help(output) => print_help(output, ui.program_name()),
         Command::Version(output) => print_version(output),
     }
 }

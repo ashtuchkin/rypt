@@ -2,7 +2,7 @@ use failure::{Fallible, ResultExt};
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
-use crate::runtime_env::{Reader, Writer};
+use crate::{Reader, Writer};
 
 pub type OpenReaderCb = Box<dyn FnOnce() -> Fallible<Reader>>;
 pub type OpenWriterCb = Box<dyn FnOnce() -> Fallible<Writer>>;

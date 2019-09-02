@@ -82,7 +82,11 @@ pub fn crypt_streams(
             InputCleanupPolicy::KeepFiles => false,
             InputCleanupPolicy::DeleteFiles => true,
             InputCleanupPolicy::PromptUser => {
-                ui.read_prompt_bool("Would you like to remove original file(s)?", false)?
+                if ui.can_read() {
+                    ui.read_prompt_bool("Would you like to remove original file(s)?", false)?
+                } else {
+                    false // By default keep files
+                }
             }
         };
 

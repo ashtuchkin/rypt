@@ -1,4 +1,4 @@
-use failure::Fallible;
+use failure::{bail, Fallible};
 use getopts::Matches;
 
 use crate::cli::credentials::{get_decrypt_credentials, get_encrypt_credential};
@@ -9,9 +9,9 @@ use crate::commands::{
     Command, CryptDirectionOpts, CryptOptions, DecryptOptions, EncryptOptions,
     GenerateKeyPairOptions, InputCleanupPolicy,
 };
-use crate::io_streams::OutputStream;
-use crate::runtime_env::RuntimeEnvironment;
-use crate::ui::{BasicUI, UI};
+use crate::io_streams::{OpenReaderCb, OpenWriterCb, OutputStream};
+use crate::ui::UI;
+use std::ffi::OsStr;
 
 mod credentials;
 mod io_streams;
@@ -42,11 +42,7 @@ const MODES: &[(&str, OperationMode)] = &[
     ("V", OperationMode::Version),
 ];
 
-fn get_mode(matches: &Matches, no_args_provided: bool) -> OperationMode {
-    if no_args_provided {
-        return OperationMode::Help;
-    }
-
+fn get_mode(matches: &Matches) -> OperationMode {
     let last_mode = MODES
         .iter()
         .flat_map(|(cmdline_arg, mode)| {
@@ -63,92 +59,72 @@ fn get_mode(matches: &Matches, no_args_provided: bool) -> OperationMode {
 }
 
 pub fn parse_command_line(
-    RuntimeEnvironment {
-        program_name,
-        cmdline_args,
-        stdin,
-        stdout,
-        stderr,
-        stdin_is_tty,
-        stdout_is_tty,
-        stderr_is_tty,
-    }: RuntimeEnvironment,
-) -> Fallible<(Command, impl UI)> {
-    let mut ui = BasicUI::from_streams(&program_name, stdin, stdin_is_tty, stderr, stderr_is_tty);
+    cmdline_args: &[impl AsRef<OsStr>],
+    open_stdin: OpenReaderCb,
+    stdin_is_tty: bool,
+    open_stdout: OpenWriterCb,
+    stdout_is_tty: bool,
+    ui: &mut dyn UI,
+) -> Fallible<Command> {
+    let options = define_options();
+    let matches = options.parse(cmdline_args)?;
+    let verbosity = matches.opt_count("v") as i32 - matches.opt_count("q") as i32;
+    ui.set_verbosity(verbosity);
 
-    let command_res = (|| -> Fallible<Command> {
-        let options = define_options();
-        let matches = options.parse(&cmdline_args)?;
-        let mut verbosity = matches.opt_count("v") as i32 - matches.opt_count("q") as i32;
-        if stdin_is_tty && stderr_is_tty {
-            // Increase verbosity when being used interactively.
-            verbosity += 1;
+    // Figure out the command type: use the last command type argument (Encrypt by default), or Help
+    // if no arguments given.
+    let mode = if cmdline_args.is_empty() && stdout_is_tty {
+        OperationMode::Help
+    } else {
+        get_mode(&matches)
+    };
+
+    Ok(match mode {
+        OperationMode::Crypt(crypt_direction) => {
+            let (streams, plaintext_on_tty) = get_input_output_streams(
+                &matches,
+                crypt_direction,
+                open_stdin,
+                stdin_is_tty,
+                open_stdout,
+                stdout_is_tty,
+            )?;
+
+            let input_cleanup_policy = match (
+                matches.opt_present("keep-input-files"),
+                matches.opt_present("delete-input-files"),
+            ) {
+                (true, true) => {
+                    bail!("Can't have both --keep-input-files and --delete-input-files flags.")
+                }
+                (true, false) => InputCleanupPolicy::KeepFiles,
+                (false, true) => InputCleanupPolicy::DeleteFiles,
+                (false, false) => InputCleanupPolicy::PromptUser,
+            };
+
+            Command::CryptStreams(
+                streams,
+                CryptOptions {
+                    input_cleanup_policy,
+                    plaintext_on_tty,
+                },
+                match crypt_direction {
+                    CryptDirection::Encrypt => CryptDirectionOpts::Encrypt(EncryptOptions {
+                        credential: get_encrypt_credential(&matches, ui)?,
+                        fast_aead_algorithm: matches.opt_present("fast"),
+                        associated_data: vec![],
+                    }),
+                    CryptDirection::Decrypt => CryptDirectionOpts::Decrypt(DecryptOptions {
+                        credentials: get_decrypt_credentials(&matches, ui)?,
+                    }),
+                },
+            )
         }
-        ui.set_verbosity(verbosity);
-
-        // Callbacks that return stdin/stdout when called. Used to create InputStream/OutputStream
-        let ui_stdin = ui.ref_input_opt();
-        let open_stdin = Box::new(move || Ok(ui_stdin.borrow_mut().take().unwrap()));
-        let open_stdout = Box::new(move || Ok(stdout));
-
-        // Figure out the mode: use the last mode argument, or Help/Encrypt by default.
-        let no_args_provided = cmdline_args.is_empty() && stdout_is_tty;
-        let command = match get_mode(&matches, no_args_provided) {
-            OperationMode::Crypt(crypt_direction) => {
-                let (streams, plaintext_on_tty) = get_input_output_streams(
-                    &matches,
-                    crypt_direction,
-                    open_stdin,
-                    stdin_is_tty,
-                    open_stdout,
-                    stdout_is_tty,
-                )?;
-
-                let input_cleanup_policy = if matches.opt_present("keep-input-files") {
-                    InputCleanupPolicy::KeepFiles
-                } else if matches.opt_present("delete-input-files") {
-                    InputCleanupPolicy::DeleteFiles
-                } else if stdin_is_tty {
-                    InputCleanupPolicy::PromptUser
-                } else {
-                    InputCleanupPolicy::KeepFiles
-                };
-
-                Command::CryptStreams(
-                    streams,
-                    CryptOptions {
-                        input_cleanup_policy,
-                        plaintext_on_tty,
-                    },
-                    match crypt_direction {
-                        CryptDirection::Encrypt => CryptDirectionOpts::Encrypt(EncryptOptions {
-                            credential: get_encrypt_credential(&matches, &ui)?,
-                            fast_aead_algorithm: matches.opt_present("fast"),
-                            associated_data: vec![],
-                        }),
-                        CryptDirection::Decrypt => CryptDirectionOpts::Decrypt(DecryptOptions {
-                            credentials: get_decrypt_credentials(&matches, &ui)?,
-                        }),
-                    },
-                )
-            }
-            OperationMode::GenerateKeypair => {
-                let streams = get_keypair_streams(&matches, open_stdout)?;
-                Command::GenerateKeyPair(GenerateKeyPairOptions { streams })
-            }
-            OperationMode::Help => {
-                Command::Help(OutputStream::Stdout { open_stdout }, program_name)
-            }
-            OperationMode::Version => Command::Version(OutputStream::Stdout { open_stdout }),
-        };
-        Ok(command)
-    })();
-
-    match command_res {
-        Ok(command) => Ok((command, ui)),
-        Err(err) => {
-            ui.print_error(&err).ok();
-            Err(err)
+        OperationMode::GenerateKeypair => {
+            let streams = get_keypair_streams(&matches, open_stdout)?;
+            Command::GenerateKeyPair(GenerateKeyPairOptions { streams })
         }
-    }
+        OperationMode::Help => Command::Help(OutputStream::Stdout { open_stdout }),
+        OperationMode::Version => Command::Version(OutputStream::Stdout { open_stdout }),
+    })
 }

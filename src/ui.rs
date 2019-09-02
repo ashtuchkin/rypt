@@ -3,12 +3,18 @@ use std::cell::{RefCell, RefMut};
 use std::io::Read;
 use std::rc::Rc;
 
-use crate::runtime_env::{Reader, Writer};
 use crate::terminal::{set_stdin_echo, TERMINAL_CLEAR_LINE};
 use crate::util::to_hex_string;
+use crate::{Reader, Writer};
 
 // User interaction interface.
 pub trait UI {
+    // Initialization
+    fn set_verbosity(&mut self, verbosity: i32);
+
+    // Environment information
+    fn program_name(&self) -> &'_ str;
+
     // Write/Print interface
     fn will_print(&self, verbosity: i32) -> bool;
     fn print(&self, verbosity: i32, message: &str) -> Fallible<()>;
@@ -66,14 +72,14 @@ pub struct BasicUI {
 
 impl BasicUI {
     pub fn from_streams(
-        program_name: &str,
+        program_name: String,
         input: Reader,
         input_is_tty: bool,
         output: Writer,
         output_is_tty: bool,
     ) -> BasicUI {
         BasicUI {
-            program_name: program_name.to_string(),
+            program_name,
             input: Rc::new(RefCell::new(Some(input))),
             input_is_tty,
             output: RefCell::new(output),
@@ -82,16 +88,20 @@ impl BasicUI {
         }
     }
 
-    pub fn set_verbosity(&mut self, verbose: i32) {
-        self.verbose = verbose;
-    }
-
-    pub fn ref_input_opt(&self) -> Rc<RefCell<Option<Reader>>> {
+    pub fn ref_input_opt(&mut self) -> Rc<RefCell<Option<Reader>>> {
         Rc::clone(&self.input)
     }
 }
 
 impl UI for BasicUI {
+    fn set_verbosity(&mut self, verbose: i32) {
+        self.verbose = verbose;
+    }
+
+    fn program_name(&self) -> &'_ str {
+        &self.program_name
+    }
+
     // Write interface
     fn will_print(&self, verbosity: i32) -> bool {
         verbosity <= self.verbose
@@ -168,7 +178,7 @@ pub mod test_helpers {
 
     #[derive(Debug, PartialEq, Clone, Copy)]
     pub enum PrintType {
-        Log(i32), // i32 is verbosity
+        Log { verbosity: i32 },
         Error,
         Interactive,
     }
@@ -229,14 +239,19 @@ pub mod test_helpers {
     }
 
     impl UI for TestUI {
-        // Write interface
+        fn set_verbosity(&mut self, _verbosity: i32) {}
 
+        fn program_name(&self) -> &str {
+            "rypt"
+        }
+
+        // Write interface
         fn will_print(&self, _verbosity: i32) -> bool {
             true
         }
 
         fn print(&self, verbosity: i32, message: &str) -> Fallible<()> {
-            self.append_printed_lines(PrintType::Log(verbosity), message)
+            self.append_printed_lines(PrintType::Log { verbosity }, message)
         }
 
         fn print_error(&self, err: &Error) -> Result<(), Error> {
