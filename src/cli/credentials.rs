@@ -2,7 +2,7 @@ use std::convert::TryInto;
 use std::fs;
 
 use failure::{bail, ensure, format_err, Fallible, ResultExt};
-use getopts::{Matches, Options};
+use getopts::Matches;
 
 use crate::cli::CryptDirection;
 use crate::credentials::{ComplexCredential, Credential};
@@ -14,84 +14,11 @@ use crate::util::{try_parse_hex_string, try_parse_hex_string_checksummed};
 // a sequence of CredentialToken, then parsed, making all required IO like asking user for a
 // password, or reading a public key file.
 
-pub(super) fn define_credential_options(mut options: Options) -> Options {
-    // Credentials
-    options
-        .optflagmulti("p", "password", "request a password interactively")
-        .optmulti(
-            "",
-            "password-name",
-            "request a password interactively, giving the password name at the prompt",
-            "PASSWORD_NAME",
-        )
-        .optmulti(
-            "",
-            "password-file",
-            "read password(s) from the file, one per line",
-            "FILENAME",
-        )
-        .optmulti(
-            "",
-            "symmetric-key",
-            "read 32-byte hex symmetric secret key(s) from the file, one per line",
-            "FILENAME",
-        )
-        .optmulti(
-            "",
-            "public-key",
-            "read public key(s) from the file, one per line",
-            "FILENAME",
-        )
-        .optmulti(
-            "",
-            "public-key-text",
-            "provide public key (64 hex chars) as a command line argument",
-            "PUBLIC_KEY",
-        )
-        .optmulti(
-            "",
-            "private-key",
-            "read private key(s) from the file, one per line",
-            "FILENAME",
-        );
-
-    // Credential combinators
-    options
-        .optmulti(
-            "t",
-            "key-threshold",
-            "number of keys required to decrypt file/group (default is 1)",
-            "NUM_KEYS",
-        )
-        .optflagmulti(
-            "a",
-            "require-all-keys",
-            "make file/group decryptable only when all keys are provided",
-        )
-        .optmulti(
-            "x",
-            "key-shares",
-            "number of key shares controlled by the key(s) that follows (default is 1)",
-            "NUM_SHARES",
-        )
-        .optflagmulti("(", "group", "starts a group of subkeys")
-        .optflagmulti(")", "end-group", "ends a group of subkeys");
-
-    // Flags
-    options.optflag(
-        "",
-        "skip-checksum-check",
-        "don't check public keys for validity",
-    );
-    options
-}
-
 pub(super) fn get_encrypt_credential(
     matches: &Matches,
+    force: bool,
     ui: &dyn UI,
 ) -> Fallible<ComplexCredential> {
-    let skip_checksum = matches.opt_present("skip-checksum-check");
-
     let mut tokens = extract_tokens(matches)?;
     if tokens.is_empty() {
         tokens.push(CredentialToken::InteractivePassword);
@@ -101,14 +28,16 @@ pub(super) fn get_encrypt_credential(
         &mut tokens.into_iter(),
         CryptDirection::Encrypt,
         ui,
-        skip_checksum,
+        force,
         0,
     )?)
 }
 
-pub(super) fn get_decrypt_credentials(matches: &Matches, ui: &dyn UI) -> Fallible<Vec<Credential>> {
-    let skip_checksum = matches.opt_present("skip-checksum-check");
-
+pub(super) fn get_decrypt_credentials(
+    matches: &Matches,
+    force: bool,
+    ui: &dyn UI,
+) -> Fallible<Vec<Credential>> {
     let mut tokens = extract_tokens(matches)?;
     if tokens.is_empty() {
         tokens.push(CredentialToken::InteractivePassword);
@@ -118,7 +47,7 @@ pub(super) fn get_decrypt_credentials(matches: &Matches, ui: &dyn UI) -> Fallibl
         &mut tokens.into_iter(),
         CryptDirection::Decrypt,
         ui,
-        skip_checksum,
+        force,
         0,
     )?;
     assert_ne!(complex_cred.num_shares, 0);
@@ -186,7 +115,7 @@ fn extract_tokens(matches: &Matches) -> Fallible<Vec<CredentialToken>> {
 
     // Options with string value
     let opt_types_with_str_value: &[(&str, fn(String) -> CredentialToken)] = &[
-        ("password-name", CredentialToken::NamedInteractivePassword),
+        ("password-named", CredentialToken::NamedInteractivePassword),
         ("password-file", CredentialToken::PasswordFile),
         ("symmetric-key", CredentialToken::SymmetricKeyFile),
         ("public-key", CredentialToken::PublicKeyFile),
@@ -499,20 +428,29 @@ fn read_password_interactively(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::options::{define_credential_combinator_options, define_credential_options};
     use crate::ui::test_helpers::TestUI;
     use crate::util;
+    use getopts::Options;
     use std::io::Write;
+
+    fn define_opts() -> Options {
+        let mut options = Options::new();
+        define_credential_options(&mut options);
+        define_credential_combinator_options(&mut options);
+        options
+    }
 
     #[test]
     fn test_empty_args() -> Fallible<()> {
-        let options = define_credential_options(Options::new());
+        let options = define_opts();
         let matches = options.parse(&[] as &[&str])?;
 
         // 1. Test encryption mode
         let ui = TestUI::new()
             .expect_prompt("Enter password", Ok("abc"))
             .expect_prompt("Re-enter password", Ok("abc"));
-        let cred = get_encrypt_credential(&matches, &ui)?;
+        let cred = get_encrypt_credential(&matches, false, &ui)?;
 
         let expected_cred = ComplexCredential {
             sub_creds: vec![(1, Credential::Password("abc".into()))],
@@ -524,7 +462,7 @@ mod tests {
 
         // 2. Test decryption mode
         let ui = TestUI::new().expect_prompt("Enter password", Ok("abc"));
-        let creds = get_decrypt_credentials(&matches, &ui)?;
+        let creds = get_decrypt_credentials(&matches, false, &ui)?;
 
         assert_eq!(creds, vec![Credential::Password("abc".into())]);
         ui.expect_all_prompts_asked();
@@ -534,7 +472,7 @@ mod tests {
 
     #[test]
     fn test_complex_encryption_happy_path() -> Fallible<()> {
-        let options = define_credential_options(Options::new());
+        let options = define_opts();
         let mut args = vec![];
         let mut args_end = vec![];
         let mut ui = TestUI::new();
@@ -555,7 +493,7 @@ mod tests {
         expected_cred.num_shares += 1;
 
         // 1b. Named password with key-shares
-        args.extend_from_slice(&["--key-shares", "3", "--password-name", "Master"]);
+        args.extend_from_slice(&["--key-shares", "3", "--password-named", "Master"]);
         ui = ui.expect_prompt("Enter password [Master]", Ok("abc1"));
         ui = ui.expect_prompt("Re-enter password", Ok("abc1"));
         expected_cred
@@ -576,7 +514,7 @@ mod tests {
         expected_cred.num_shares += 2;
 
         // 1d. Threshold + key-shares + group + 'all keys required' flag
-        args.extend_from_slice(&["-t", "5", "-x", "2", "-(", "-a"]);
+        args.extend_from_slice(&["-t", "5", "--key-shares", "2", "-(", "-a"]);
         args_end.extend_from_slice(&["-)"]);
         expected_cred.threshold = 5;
         let mut expected_group_cred = ComplexCredential {
@@ -628,7 +566,7 @@ mod tests {
         args_end.reverse();
         args.append(&mut args_end);
         let matches = options.parse(args)?;
-        let cred = get_encrypt_credential(&matches, &ui)?;
+        let cred = get_encrypt_credential(&matches, false, &ui)?;
         assert_eq!(cred, expected_cred);
         ui.expect_all_prompts_asked();
         Ok(())

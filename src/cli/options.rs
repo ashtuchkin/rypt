@@ -1,60 +1,145 @@
-use crate::cli::credentials::define_credential_options;
 use crate::cli::DEFAULT_FILE_SUFFIX;
 use getopts::Options;
 
-pub fn define_options() -> Options {
-    let mut options = Options::new();
-
-    // Modes / subcommands
+// Modes of operation / subcommands
+pub fn define_mode_options(options: &mut Options) {
     options
         .optflag("e", "encrypt", "encrypt files (default)")
         .optflag("d", "decrypt", "decrypt files")
-        .optflag("g", "generate-keypair", "generate public/private key pair")
+        .optflag("g", "gen-keypair", "generate public/private key pairs")
         .optflag("h", "help", "display this short help")
         .optflag("V", "version", "display version");
+}
 
-    // Common flags
+// Common flags
+pub fn define_common_options(options: &mut Options) {
     options
         .optflagmulti(
             "v",
             "verbose",
-            "be verbose; specify twice for even more verbosity",
+            "be more verbose; specify twice for even more verbosity",
         )
-        .optflagmulti("q", "quiet", "be quiet; skip unnecessary messages");
+        .optflagmulti(
+            "q",
+            "quiet",
+            "suppress most messages; specify twice to suppress all",
+        )
+        .optflag("f", "force", "skip sanity checks");
+}
 
-    // Credential options
-    options = define_credential_options(options);
-
-    // Encryption/decryption flags
+// Encryption/decryption flags
+pub fn define_crypt_options(options: &mut Options) {
     options
         .optflag(
             "",
             "fast",
-            "use a different encryption algorithm (AES256-GCM) that is faster, but supported only on newer x86 processors",
+            "use a faster encryption algorithm that is only supported on newer x86 processors (AES256-GCM)",
         )
         .optflag(
-            "k",
-            "keep-input-files",
-            "don't delete original files on successful operation",
+            "K",
+            "keep-inputs",
+            "keep original files on successful operation",
         )
         .optflag(
-            "",
-            "delete-input-files",
+            "D",
+            "discard-inputs",
             "delete original files on successful operation",
         )
         .optflag(
             "s",
-            "stdout",
-            "write to standard output",
+            "stream",
+            "streaming mode: single stream, non-file inputs allowed, writes to standard output; \
+             enabled by default if no inputs or '-' is specified",
         )
         .optopt(
             "S",
             "suffix",
             &format!(
-                "encrypted file suffix, defaults to \".{}\"",
+                "encrypted files suffix/extension; default is \".{}\"",
                 DEFAULT_FILE_SUFFIX
             ),
-            ".suf",
+            "SUFFIX",
         );
+}
+
+// Credentials
+pub fn define_credential_options(options: &mut Options) {
     options
+        .optflagmulti(
+            "p",
+            "password",
+            "prompt for one password interactively; specify several times for multiple passwords; \
+             default if no other credentials provided",
+        )
+        .optmulti(
+            "",
+            "password-named",
+            "prompt for a password identified by name (e.g. 'Master password'); name is only used \
+             for prompt and not saved",
+            "PASSWORD_NAME",
+        )
+        .optmulti(
+            "",
+            "password-file",
+            "read password(s) from a file, one per line",
+            "FILENAME",
+        )
+        .optmulti(
+            "",
+            "public-key",
+            "(encryption only) read public key(s) from a file, one per line",
+            "FILENAME",
+        )
+        .optmulti(
+            "",
+            "public-key-text",
+            "(encryption only) read public key directly as a command line argument",
+            "PUBLIC_KEY",
+        )
+        .optmulti(
+            "",
+            "private-key",
+            "(decryption only) read private key(s) from a file, one per line",
+            "FILENAME",
+        )
+        .optmulti(
+            "",
+            "symmetric-key",
+            "(advanced) read 32-byte hex symmetric secret key(s) from a file, one per line",
+            "FILENAME",
+        );
+}
+
+// Credential combinators
+pub fn define_credential_combinator_options(options: &mut Options) {
+    options
+        .optmulti(
+            "t",
+            "key-threshold",
+            "number of keys/passwords required to decrypt the file or the current group; default is 1",
+            "NUM_KEYS",
+        )
+        .optflagmulti(
+            "a",
+            "require-all-keys",
+            "require all keys to decrypt the file or the current group",
+        )
+        .optmulti(
+            "",
+            "key-shares",
+            "(very advanced) number of key shares provided by the following key; default is 1",
+            "NUM_SHARES",
+        )
+        .optflagmulti("(", "start-group", "start a group of keys")
+        .optflagmulti(")", "end-group", "end a group of keys");
+}
+
+pub fn define_all_options() -> Options {
+    let mut opts = Options::new();
+    define_mode_options(&mut opts);
+    define_common_options(&mut opts);
+    define_crypt_options(&mut opts);
+    define_credential_options(&mut opts);
+    define_credential_combinator_options(&mut opts);
+    opts
 }

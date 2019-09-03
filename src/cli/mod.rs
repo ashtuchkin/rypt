@@ -1,10 +1,9 @@
-use failure::{bail, Fallible};
+use failure::{bail, ensure, Fallible};
 use getopts::Matches;
 
 use crate::cli::credentials::{get_decrypt_credentials, get_encrypt_credential};
 use crate::cli::io_streams::get_input_output_streams;
 use crate::cli::key_management::get_keypair_streams;
-pub use crate::cli::options::define_options;
 use crate::commands::{
     Command, CryptDirectionOpts, CryptOptions, DecryptOptions, EncryptOptions,
     GenerateKeyPairOptions, InputCleanupPolicy,
@@ -17,7 +16,7 @@ use std::ffi::OsStr;
 mod credentials;
 mod io_streams;
 mod key_management;
-mod options;
+pub mod options;
 
 pub const DEFAULT_FILE_SUFFIX: &str = "rypt";
 
@@ -67,10 +66,15 @@ pub fn parse_command_line(
     stdout_is_tty: bool,
     ui: &mut dyn UI,
 ) -> Fallible<Command> {
-    let options = define_options();
+    let options = options::define_all_options();
     let matches = options.parse(cmdline_args)?;
     let verbosity = matches.opt_count("v") as i32 - matches.opt_count("q") as i32;
+    ensure!(
+        -2 <= verbosity && verbosity <= 2,
+        "Too many -v or -q arguments; up to 2 allowed"
+    );
     ui.set_verbosity(verbosity);
+    let force = matches.opt_present("f");
 
     // Figure out the command type: use the last command type argument (Encrypt by default), or Help
     // if no arguments given.
@@ -92,12 +96,10 @@ pub fn parse_command_line(
             )?;
 
             let input_cleanup_policy = match (
-                matches.opt_present("keep-input-files"),
-                matches.opt_present("delete-input-files"),
+                matches.opt_present("keep-inputs"),
+                matches.opt_present("discard-inputs"),
             ) {
-                (true, true) => {
-                    bail!("Can't have both --keep-input-files and --delete-input-files flags.")
-                }
+                (true, true) => bail!("Can't have both --keep-inputs and --discard-inputs flags."),
                 (true, false) => InputCleanupPolicy::KeepFiles,
                 (false, true) => InputCleanupPolicy::DeleteFiles,
                 (false, false) => InputCleanupPolicy::PromptUser,
@@ -111,12 +113,12 @@ pub fn parse_command_line(
                 },
                 match crypt_direction {
                     CryptDirection::Encrypt => CryptDirectionOpts::Encrypt(EncryptOptions {
-                        credential: get_encrypt_credential(&matches, ui)?,
+                        credential: get_encrypt_credential(&matches, force, ui)?,
                         fast_aead_algorithm: matches.opt_present("fast"),
                         associated_data: vec![],
                     }),
                     CryptDirection::Decrypt => CryptDirectionOpts::Decrypt(DecryptOptions {
-                        credentials: get_decrypt_credentials(&matches, ui)?,
+                        credentials: get_decrypt_credentials(&matches, force, ui)?,
                     }),
                 },
             )

@@ -1,8 +1,7 @@
 # P0
  * CLI: Create consistent verbose/quiet rules
    * Default to rather verbose if in terminal; further verbose should print details of algorithms, etc
- * CLI: Polish help and messages
-   * Explain file mode/stream mode
+ * CLI: Polish main flow messages
  * CLI: Exit code should signify error if at least one file fails.
  * Finalize 'version' field handling
  * Review header size limitation

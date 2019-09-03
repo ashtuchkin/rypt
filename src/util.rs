@@ -73,7 +73,7 @@ pub enum ParseHexError {
     #[fail(display = "Odd number of hex characters")]
     InvalidLength,
 
-    #[fail(display = "Invalid checksum")]
+    #[fail(display = "Invalid public key checksum (use --force to skip this check)")]
     InvalidChecksum(Vec<u8>),
 }
 
