@@ -1,8 +1,5 @@
 # P0
- * CLI: Create consistent verbose/quiet rules
-   * Default to rather verbose if in terminal; further verbose should print details of algorithms, etc
- * CLI: Polish main flow messages
- * CLI: Exit code should signify error if at least one file fails.
+ * Don't print errors on -qq
  * Finalize 'version' field handling
  * Review header size limitation
  * Check carefully decoding path, with the assumption that attacker changes it.
@@ -38,6 +35,8 @@
  * Add CLI commands to set and show non-encrypted authenticated data, with or without password.
    * Potentially ask for password after reading header, to show password hint.
  * Add CLI commands to extract and use key parts, to avoid sharing private key when using Shamir.
+ * Print Access Structure and additional algorithm details on encryption with -v flag.
+ * Progress should show "Elapsed" when the file is finished (ETA is irrelevant there).
  * Progress should be shown for the whole operation (estimate total size) - requires InputStream creators to read 
    metadata (which might be a good thing anyway)
  * Sender signature and repudiable verification
@@ -59,6 +58,7 @@
  * Initially write to an invisible tempfile in the same directory (using either tempfile crate or O_TMPFILE), then
    atomically make it visible.
  * Check for entropy in the beginning and add warning (see https://libsodium.gitbook.io/doc/usage#sodium_init-stalling-on-linux)
+ * Support progress bar on Windows earlier than 10 (see comment in terminal.rs)
  
 # Undecided / maybe
  * CLI: Add color.

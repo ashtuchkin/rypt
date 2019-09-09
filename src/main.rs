@@ -1,5 +1,6 @@
 use rypt::{
     self,
+    errors::CompositeError,
     terminal::{init_console, is_tty},
     ui::{BasicUI, UI},
     Reader, Writer,
@@ -53,9 +54,12 @@ fn main() {
     // Execute the command.
     let res = res.and_then(|command| rypt::commands::run_command(command, &ui));
 
-    // Print error, if any.
+    // Print error, if any. We also skip printing CompositeError, as the underlying errors were
+    // already printed before.
     res.unwrap_or_else(|err| {
-        ui.print_error(&err).ok();
+        if let Err(err) = err.downcast::<CompositeError>() {
+            ui.print_error(&err).ok();
+        }
         std::process::exit(1);
     });
 }

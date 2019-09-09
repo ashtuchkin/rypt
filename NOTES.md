@@ -11,23 +11,23 @@ Note, a lot of the information here is stale. Don't rely on it for anything.
       * Copies the same user/group, permissions, modified timestamps. 
       * ?? removes original file on success (Question: wipe the file?; Question: ask user to delete it?; Question: only after all files been encoded?); 
       * removes new file on failure.
-   * Skips all the other filetypes (folders, symlinks, char/block devices, sockets), with reference to pipe mode.
- * Pipe mode (-s):
+   * Skips all the other filetypes (folders, symlinks, char/block devices, sockets), with reference to streaming mode.
+ * Streaming mode (-s):
    * Only one input is allowed. Output is always to stdout.
    * Input: stdin ("-"), files, named pipes (fifo/process substitution), char devices, potentially through symlinks.
    * Default if stdin is the input (or no files provided).
    * Bail if encrypted data goes from/to a TTY.
-   * Bail if stdin input requested + password interactive mode
+   * Allow if stdin input requested + password interactive mode
  * Ways to provide passwords/keys:
    * Password: 1) -p interactive prompt via stdin/stderr, 2) --password-file=filename
    * Symmetric key: --symmetric-key=filename  (file must contain 32 bytes hex keys, one per line)
    * Private key / Public key: --public-key=filename,  --private-key=filename
      --public-key-text=b8604b483a8c215447afacfc82762411df698b76f8539fb74a8b3d48e9ec3f26
-   * Sender private key: --sign-private-key=filename, --repudiable
+   * Future: sender private key: --sign-private-key=filename, --repudiable
  * Encrypt a folder and other creative pipe usages:
-   `tar c <folder> | xz | rypt -P password.txt | aws s3 cp - s3://mybucket/archive.xz.rypt`
-   `rypt -S <(tar c . | xz) > archive.xz.rypt`  # will ask password interactively
- * User authenticated data:
+   `tar c <folder> | xz | rypt --password-file password.txt | aws s3 cp - s3://mybucket/archive.xz.rypt`
+   `rypt -s <(tar c . | xz) > archive.xz.rypt`  # will ask password interactively
+ * Future: User authenticated data:
    * Only one file supported, or pipe mode.
    * `rypt --public-data="ABC" input_file`  - Include public info string to the file when encrypting
    * `rypt --public-data-file=public_file.txt input_file`  - Include public info file contents to the file when encrypting
@@ -41,8 +41,30 @@ Note, a lot of the information here is stale. Don't rely on it for anything.
    * env vars do leak private key and seed (i.e. files can be decoded), but don't leak the password.
    * Note you can see all env vars of the processes you own (and only you) in `/proc/<pid>/environ` (https://security.stackexchange.com/a/14009)
    `rypt-pass -- tar cf output.tar.rypt --use-compress-program rypt <folder> `
- * No need for env var support: "--password-file=<(echo $ABC)" would do. 
-   Same for command line arg: "--password-file=<(echo password)"; it will also not show up in htop.
+   * Workaround: "--password-file=<(echo $ABC)" would do. 
+     Same for command line arg: "--password-file=<(echo password)"; it will also not show up in htop.
+
+ * Verbose/quiet rules:
+   * Exit code: 0 if success, 1 if at least one error. In the future, 2 if at least one warning.
+   * Verbosity: 
+     * -2 => Don't print anything; No interactive prompts allowed.
+     * -1 => Show only errors and warnings; Password prompts allowed, but not the other prompts
+     * 0 (no -v or -q given) => treat as 1 if stderr is TTY, -1 otherwise 
+     * 1 => All messages, including warnings, enough for basic usage without reading manual.
+       * Direction
+       * All input / output files
+     * 2 => Include Access Structure visualization, algorithms chosen. 
+     * (potentially in the future) 3 => Logs for initializing the library, opening files, encrypting chunks.
+   * Progress bar is enabled when printing i/o file names and stderr is tty.
+     * Not permanent - we should have 1 line per file, not 3. Maybe keep one at the end.
+     * Only show when conversion takes > 2 sec
+   * When encoding from stdin / decoding to stdout - don't use progress bar.
+   * Errors/warnings format:
+     `./rypt: Error: Private keys should not be passed in when encrypting (pass -f to force)` 
+     `./rypt: Warning: Private keys should not be passed in when encrypting (forced)`
+     `./rypt: Error creating 'target/abc': File exists (os error 17) (pass -f to force)` 
+     `./rypt: Invalid or insufficient credentials`
+      
 
 
 ## Public key infrastructure compatibility

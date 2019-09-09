@@ -23,6 +23,8 @@ pub fn init_console() {
         GetConsoleMode(hstderr, &mut mode);
         // NOTE: We intentionally ignore errors here.
 
+        // NOTE: Looks like this only works for Windows 10 since Version 1511 (released in 2016).
+        // We might need to change this logic to support earlier versions of windows.
         mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
         SetConsoleMode(hstderr, mode);
     }

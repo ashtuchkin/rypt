@@ -155,9 +155,11 @@ fn extract_tokens(matches: &Matches) -> Fallible<Vec<CredentialToken>> {
 
     // Disallow arguments sharing the same position (this can happen when we have several short-form
     // arguments given together like "-a("), because we can't get their ordering from getopts.
-    let tokens_len = tokens.len();
-    tokens.dedup_by_key(|(pos, _)| *pos);
-    if tokens.len() < tokens_len {
+    // Note, if it's the same argument repeated several times (like "-ppp"), then it's fine because
+    // the ordering doesn't matter in that case.
+    let mut deduped_tokens = tokens.clone();
+    deduped_tokens.dedup_by_key(|(pos, _)| *pos);
+    if deduped_tokens.len() < tokens.len() && deduped_tokens.len() > 1 {
         bail!("Merged short arguments (e.g. '-a(') are not supported. Pass them separately instead (e.g. '-a -(')");
     }
 
@@ -395,11 +397,11 @@ fn read_password_interactively(
     ensure!(
         ui.can_read(),
         "Can't read password from a non-TTY stdin. \
-         Use '--password-file' if you'd like to provide password non-interactively."
+         Use '--password-file' if you'd like to provide a password non-interactively."
     );
 
     let suffix = if let Some(password_name) = password_name {
-        format!(" [{}]", password_name)
+        format!(" ({})", password_name)
     } else {
         "".into()
     };
@@ -414,12 +416,14 @@ fn read_password_interactively(
 
         // When encrypting, we request the same password twice to ensure it's entered correctly.
         if crypt_direction == CryptDirection::Encrypt {
-            let password_again = ui.read_password("Re-enter password: ")?;
+            let password_again = ui.read_password("Confirm password: ")?;
             if password_again != password {
-                ui.println_interactive("Passwords didn't match, try again.")?;
+                ui.println_interactive("Passwords don't match, try again.")?;
                 continue;
             }
         }
+
+        ui.println_interactive("")?;
 
         return Ok(Credential::Password(password));
     }
@@ -449,7 +453,7 @@ mod tests {
         // 1. Test encryption mode
         let ui = TestUI::new()
             .expect_prompt("Enter password", Ok("abc"))
-            .expect_prompt("Re-enter password", Ok("abc"));
+            .expect_prompt("Confirm password", Ok("abc"));
         let cred = get_encrypt_credential(&matches, false, &ui)?;
 
         let expected_cred = ComplexCredential {
@@ -486,7 +490,7 @@ mod tests {
         // 1a. Regular password
         args.push("-p");
         ui = ui.expect_prompt("Enter password", Ok("abc"));
-        ui = ui.expect_prompt("Re-enter password", Ok("abc"));
+        ui = ui.expect_prompt("Confirm password", Ok("abc"));
         expected_cred
             .sub_creds
             .push((1, Credential::Password("abc".into())));
@@ -494,8 +498,8 @@ mod tests {
 
         // 1b. Named password with key-shares
         args.extend_from_slice(&["--key-shares", "3", "--password-named", "Master"]);
-        ui = ui.expect_prompt("Enter password [Master]", Ok("abc1"));
-        ui = ui.expect_prompt("Re-enter password", Ok("abc1"));
+        ui = ui.expect_prompt("Enter password (Master)", Ok("abc1"));
+        ui = ui.expect_prompt("Confirm password", Ok("abc1"));
         expected_cred
             .sub_creds
             .push((3, Credential::Password("abc1".into())));

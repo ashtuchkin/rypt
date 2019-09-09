@@ -233,7 +233,7 @@ fn threshold_encrypt_decrypt() -> Fallible<()> {
     .output()?;
     assert_eq!(std::str::from_utf8(&output.stdout)?, "");
     assert!(std::str::from_utf8(&output.stderr)?.contains("Invalid or insufficient credentials"));
-    //assert!(!output.status.success());   // TODO.
+    assert!(!output.status.success());
 
     // 4. Decrypt the file using 3 passwords - should succeed
     let output = util::main_cmd(&[
@@ -308,7 +308,7 @@ fn max_threshold_encrypt_decrypt() -> Fallible<()> {
     .output()?;
     assert_eq!(std::str::from_utf8(&output.stdout)?, "");
     assert!(std::str::from_utf8(&output.stderr)?.contains("Invalid or insufficient credentials"));
-    //assert!(!output.status.success());   // TODO.
+    assert!(!output.status.success());
 
     // 4. Decrypt the file using 5 passwords - should succeed
     let output = util::main_cmd(&[

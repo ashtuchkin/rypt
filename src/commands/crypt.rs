@@ -1,6 +1,7 @@
 use failure::Fallible;
 
 use crate::commands::{CryptDirectionOpts, CryptOptions, InputCleanupPolicy};
+use crate::errors::CompositeError;
 use crate::header::{decrypt_header, encrypt_header};
 use crate::header_io::{read_header, write_header};
 use crate::io_streams::InputOutputStream;
@@ -16,25 +17,31 @@ pub fn crypt_streams(
 ) -> Fallible<()> {
     let total_files = io_streams.len();
     let mut success_cleanup_cbs = vec![];
-    let mut failures = vec![];
+    let mut errors = vec![];
     for (file_idx, io_stream) in io_streams.into_iter().enumerate() {
-        let mut input_delete_cb_opt = None;
-        let mut output_delete_cb_opt = None;
+        let mut input_cleanup_cb_opt = None;
+        let mut output_cleanup_cb_opt = None;
 
         let res = (|| {
             let InputOutputStream { input, output } = io_stream;
 
             let mut progress_printer = ProgressPrinter::new(ui, opts.plaintext_on_tty);
-            progress_printer.print_file_header(&input.path(), file_idx, total_files);
+            progress_printer.print_file_header(
+                &input.path(),
+                output.as_ref().ok().map(|s| s.path()),
+                file_idx,
+                total_files,
+            );
 
             let output = output?;
 
-            let (mut input_stream, input_filesize, delete_cb_opt) = input.open_with_delete_cb()?;
-            input_delete_cb_opt = delete_cb_opt;
+            let (mut input_stream, input_filesize, cleanup_cb_opt) =
+                input.open_with_cleanup_cb()?;
+            input_cleanup_cb_opt = cleanup_cb_opt;
             progress_printer.set_filesize(input_filesize);
 
-            let (mut output_stream, delete_cb_opt) = output.open_with_delete_cb()?;
-            output_delete_cb_opt = delete_cb_opt;
+            let (mut output_stream, cleanup_cb_opt) = output.open_with_cleanup_cb()?;
+            output_cleanup_cb_opt = cleanup_cb_opt;
 
             let (stream_converter, chunk_size) = match direction {
                 CryptDirectionOpts::Encrypt(opts) => {
@@ -62,18 +69,20 @@ pub fn crypt_streams(
             Ok(()) => {
                 // Store input file deletion callback (if not None), so that we can delete input
                 // files after confirming with user at the end.
-                success_cleanup_cbs.extend(input_delete_cb_opt);
+                success_cleanup_cbs.extend(input_cleanup_cb_opt);
             }
             Err(err) => {
                 ui.print_error(&err).ok();
-                failures.push(err);
+                errors.push(err);
 
                 // Delete output file on error.
-                if let Some(cb) = output_delete_cb_opt {
+                if let Some(cb) = output_cleanup_cb_opt {
                     cb().or_else(|err| ui.print_error(&err)).ok();
                 }
             }
         }
+
+        ui.println(0, "")?;
     }
 
     // Delete input files if necessary.
@@ -82,11 +91,8 @@ pub fn crypt_streams(
             InputCleanupPolicy::KeepFiles => false,
             InputCleanupPolicy::DeleteFiles => true,
             InputCleanupPolicy::PromptUser => {
-                if ui.can_read() {
-                    ui.read_prompt_bool("Would you like to remove original file(s)?", false)?
-                } else {
-                    false // By default keep files
-                }
+                ui.read_prompt_bool(0, "Remove original file(s)?", false)?
+                    .unwrap_or(false) // By default keep files
             }
         };
 
@@ -97,6 +103,9 @@ pub fn crypt_streams(
         }
     }
 
-    // TODO: return error in case of !failures.is_empty()
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CompositeError { errors }.into())
+    }
 }

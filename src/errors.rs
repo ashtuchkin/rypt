@@ -1,5 +1,7 @@
-use failure::Fail;
+use failure::{Error, Fail};
 
 #[derive(Fail, Debug)]
-#[fail(display = "Early termination")]
-pub struct EarlyTerminationError;
+#[fail(display = "")]
+pub struct CompositeError {
+    pub errors: Vec<Error>,
+}

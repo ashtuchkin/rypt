@@ -5,13 +5,14 @@ use std::time::{Duration, Instant};
 
 use crate::ui::UI;
 use crate::util;
+use std::borrow::Cow;
 
 const PRINT_PERIOD: Duration = Duration::from_millis(100);
 const SPEED_CALC_PERIOD: Duration = Duration::from_secs(10); // Calculate speed over the last 10 seconds
 const KEEP_STAMPS_COUNT: usize =
     (SPEED_CALC_PERIOD.as_millis() / PRINT_PERIOD.as_millis()) as usize;
 
-const PROGRESS_VERBOSITY: i32 = 1;
+const PROGRESS_VERBOSITY: i32 = 0;
 
 pub struct ProgressPrinter<'a> {
     ui: &'a dyn UI,
@@ -43,19 +44,23 @@ impl ProgressPrinter<'_> {
         self.filesize = filesize;
     }
 
-    pub fn print_file_header(&mut self, input_path: &Path, file_idx: usize, total_files: usize) {
-        if !self.do_print {
-            return;
-        }
-        let mut path = input_path.to_string_lossy();
-        if path == "-" {
-            if total_files == 1 {
-                return; // Don't print header if we only have one stdin input.
-            }
-            path = "(stdin)".into();
-        }
-        let s = format!("{} ({}/{})", path, file_idx + 1, total_files);
-        self.ui.println(PROGRESS_VERBOSITY, &s).ok();
+    pub fn print_file_header(
+        &mut self,
+        input_path: &Path,
+        output_path: Option<&Path>,
+        file_idx: usize,
+        total_files: usize,
+    ) {
+        let header = format!(
+            "{} -> {} ({}/{})",
+            input_path.to_string_lossy(),
+            output_path
+                .map(|s| s.to_string_lossy())
+                .unwrap_or(Cow::Borrowed("(error)")),
+            file_idx + 1,
+            total_files
+        );
+        self.ui.println(PROGRESS_VERBOSITY, &header).ok();
     }
 
     pub fn print_progress(&mut self, written_bytes: usize) {
@@ -149,7 +154,7 @@ impl Drop for ProgressPrinter<'_> {
     fn drop(&mut self) {
         if self.do_print && self.printed_at_least_once {
             self.print_progress_line();
-            self.ui.print(PROGRESS_VERBOSITY, "\n\n").ok();
+            self.ui.println(PROGRESS_VERBOSITY, "").ok();
         }
     }
 }

@@ -29,7 +29,9 @@ impl InputStream {
                 let file = OpenOptions::new()
                     .read(true)
                     .open(&path)
-                    .with_context(|e| format!("{}: {}", path.to_string_lossy(), e))?;
+                    .with_context(|e| {
+                        format!("Error opening '{}': {}", path.to_string_lossy(), e)
+                    })?;
 
                 // NOTE: File-like streams report their file size as 0; we return None instead.
                 let metadata = file.metadata()?;
@@ -44,20 +46,16 @@ impl InputStream {
         }
     }
 
-    pub fn open_with_delete_cb(
+    pub fn open_with_cleanup_cb(
         self,
     ) -> Fallible<(Reader, Option<usize>, Option<impl FnOnce() -> Fallible<()>>)> {
-        let delete_cb = match &self {
+        let cleanup_cb_opt = match &self {
             InputStream::File { path, .. } => {
                 let path = path.clone();
                 Some(move || {
                     fs::remove_file(&path)
                         .with_context(|err| {
-                            format!(
-                                "Error deleting input file {}: {}",
-                                path.to_string_lossy(),
-                                err
-                            )
+                            format!("Error deleting '{}': {}", path.to_string_lossy(), err)
                         })
                         .map_err(|err| err.into())
                 })
@@ -66,7 +64,7 @@ impl InputStream {
         };
 
         let (reader, filesize) = self.open()?;
-        Ok((reader, filesize, delete_cb))
+        Ok((reader, filesize, cleanup_cb_opt))
     }
 }
 
@@ -106,25 +104,21 @@ impl OutputStream {
                     .write(true)
                     .create_new(true)  // Make sure we don't overwrite existing files
                     .open(&path)
-                    .with_context(|e| format!("{}: {}", path.to_string_lossy(), e))?;
+                    .with_context(|e| format!("Error creating '{}': {}", path.to_string_lossy(), e))?;
                 Ok(Box::new(file))
             }
             OutputStream::Stdout { open_stdout } => open_stdout(),
         }
     }
 
-    pub fn open_with_delete_cb(self) -> Fallible<(Writer, Option<impl FnOnce() -> Fallible<()>>)> {
-        let delete_cb = match &self {
+    pub fn open_with_cleanup_cb(self) -> Fallible<(Writer, Option<impl FnOnce() -> Fallible<()>>)> {
+        let cleanup_cb_opt = match &self {
             OutputStream::File { path } => {
                 let path = path.clone();
                 Some(move || {
                     fs::remove_file(&path)
                         .with_context(|err| {
-                            format!(
-                                "Error deleting output file {}: {}",
-                                path.to_string_lossy(),
-                                err
-                            )
+                            format!("Error deleting '{}': {}", path.to_string_lossy(), err)
                         })
                         .map_err(|err| err.into())
                 })
@@ -132,7 +126,7 @@ impl OutputStream {
             OutputStream::Stdout { .. } => None,
         };
 
-        Ok((self.open()?, delete_cb))
+        Ok((self.open()?, cleanup_cb_opt))
     }
 }
 

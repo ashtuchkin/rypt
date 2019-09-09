@@ -75,10 +75,10 @@ pub(super) fn get_input_output_streams(
             .collect();
 
         // Bail right away if all files have failed.
-        if io_streams.iter().all(|io_stream| io_stream.output.is_err()) {
-            let io_stream = io_streams.into_iter().next().unwrap();
-            return Err(io_stream.output.unwrap_err());
-        }
+        //        if io_streams.iter().all(|io_stream| io_stream.output.is_err()) {
+        //            let io_stream = io_streams.into_iter().next().unwrap();
+        //            return Err(io_stream.output.unwrap_err());
+        //        }
 
         (io_streams, false)
     })

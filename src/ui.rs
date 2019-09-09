@@ -34,14 +34,23 @@ pub trait UI {
     fn read_prompt(&self, prompt: &str) -> Fallible<String>;
     fn set_stdin_echo(&self, enable: bool);
 
-    fn read_prompt_bool(&self, prompt: &str, default: bool) -> Fallible<bool> {
+    fn read_prompt_bool(
+        &self,
+        verbosity: i32,
+        prompt: &str,
+        default: bool,
+    ) -> Fallible<Option<bool>> {
+        if !self.can_read() || !self.will_print(verbosity) {
+            return Ok(None);
+        }
+
         let yn_helper = if default { "[Y/n]" } else { "[y/N]" };
         let prompt = format!("{} {}: ", prompt, yn_helper);
         loop {
             match self.read_prompt(&prompt)?.to_ascii_lowercase().as_str() {
-                "y" | "yes" => return Ok(true),
-                "n" | "no" => return Ok(false),
-                "" => return Ok(default),
+                "y" | "yes" => return Ok(Some(true)),
+                "n" | "no" => return Ok(Some(false)),
+                "" => return Ok(Some(default)),
                 _ => {
                     self.println_interactive("Invalid input, please enter 'y' or 'n'.")?;
                 }
@@ -67,7 +76,7 @@ pub struct BasicUI {
     output: RefCell<Writer>,
     input_is_tty: bool,
     output_is_tty: bool,
-    verbose: i32,
+    verbosity: i32,
 }
 
 impl BasicUI {
@@ -84,7 +93,7 @@ impl BasicUI {
             input_is_tty,
             output: RefCell::new(output),
             output_is_tty,
-            verbose: 0,
+            verbosity: 0,
         }
     }
 
@@ -98,8 +107,12 @@ impl BasicUI {
 }
 
 impl UI for BasicUI {
-    fn set_verbosity(&mut self, verbose: i32) {
-        self.verbose = verbose;
+    fn set_verbosity(&mut self, verbosity: i32) {
+        if verbosity == 0 {
+            self.verbosity = if self.output_is_tty { 1 } else { -1 };
+        } else {
+            self.verbosity = verbosity;
+        }
     }
 
     fn program_name(&self) -> &str {
@@ -108,7 +121,7 @@ impl UI for BasicUI {
 
     // Write interface
     fn will_print(&self, verbosity: i32) -> bool {
-        verbosity <= self.verbose
+        verbosity <= self.verbosity
     }
 
     fn print(&self, verbosity: i32, message: &str) -> Fallible<()> {

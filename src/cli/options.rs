@@ -6,7 +6,7 @@ pub fn define_mode_options(options: &mut Options) {
     options
         .optflag("e", "encrypt", "encrypt files (default)")
         .optflag("d", "decrypt", "decrypt files")
-        .optflag("g", "gen-keypair", "generate public/private key pairs")
+        .optflag("g", "gen-keypair", "generate public/private key pair(s)")
         .optflag("h", "help", "display this short help")
         .optflag("V", "version", "display version");
 }
@@ -22,9 +22,13 @@ pub fn define_common_options(options: &mut Options) {
         .optflagmulti(
             "q",
             "quiet",
-            "suppress most messages; specify twice to suppress all",
+            "suppress messages and warnings; specify twice to skip error messages as well",
         )
-        .optflag("f", "force", "skip sanity checks");
+        .optflag(
+            "f",
+            "force",
+            "make sanity checks warnings instead of errors",
+        );
 }
 
 // Encryption/decryption flags
@@ -38,7 +42,7 @@ pub fn define_crypt_options(options: &mut Options) {
         .optflag(
             "K",
             "keep-inputs",
-            "keep original files on successful operation",
+            "keep original files on successful operation (specify to avoid prompt at the end)",
         )
         .optflag(
             "D",
@@ -55,7 +59,7 @@ pub fn define_crypt_options(options: &mut Options) {
             "S",
             "suffix",
             &format!(
-                "encrypted files suffix/extension; default is \".{}\"",
+                "encrypted files suffix; default is \".{}\"",
                 DEFAULT_FILE_SUFFIX
             ),
             "SUFFIX",
@@ -75,7 +79,7 @@ pub fn define_credential_options(options: &mut Options) {
             "",
             "password-named",
             "prompt for a password identified by name (e.g. 'Master password'); name is only used \
-             for prompt and not saved",
+             for prompt, not saved",
             "PASSWORD_NAME",
         )
         .optmulti(

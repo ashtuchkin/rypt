@@ -20,7 +20,7 @@ pub fn print_help(output: OutputStream, program_name: &str) -> Fallible<()> {
         stdout,
         "\
 Usage: {program_name} [OPTION].. [FILE]..
-Encrypt/decrypt FILE-s using one or more passwords and public keys. 
+Encrypt/decrypt FILE-s using passwords and/or public keys. 
 
 Commands (use one):
 {command_opts}
