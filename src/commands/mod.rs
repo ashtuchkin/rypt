@@ -22,7 +22,6 @@ pub enum Command {
 pub struct EncryptOptions {
     pub credential: ComplexCredential,
     pub fast_aead_algorithm: bool,
-    pub associated_data: Vec<u8>,
 }
 
 #[derive(Debug)]

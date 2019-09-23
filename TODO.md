@@ -1,6 +1,5 @@
 # P0
  * Don't print errors on -qq
- * Finalize 'version' field handling
  * Review header size limitation
  * Check carefully decoding path, with the assumption that attacker changes it.
    * Assert all decoded payload keys are same 

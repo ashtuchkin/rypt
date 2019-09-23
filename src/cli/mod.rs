@@ -115,7 +115,6 @@ pub fn parse_command_line(
                     CryptDirection::Encrypt => CryptDirectionOpts::Encrypt(EncryptOptions {
                         credential: get_encrypt_credential(&matches, force, ui)?,
                         fast_aead_algorithm: matches.opt_present("fast"),
-                        associated_data: vec![],
                     }),
                     CryptDirection::Decrypt => CryptDirectionOpts::Decrypt(DecryptOptions {
                         credentials: get_decrypt_credentials(&matches, force, ui)?,

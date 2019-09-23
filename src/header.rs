@@ -15,9 +15,9 @@ use crate::crypto::{
 };
 use crate::header_io::MAX_HEADER_LEN;
 use crate::proto::rypt::{
-    encrypted_key_parts::KeyData, file_header::CryptoFamily,
-    libsodium_crypto_family::AeadAlgorithm, CompositeKey, EncryptedHeader, EncryptedKeyParts,
-    FileHeader, FormatVersion, LibsodiumCryptoFamily, SenderAuthType,
+    encrypted_key_parts::KeyData, libsodium_crypto_family::AeadAlgorithm,
+    rypt_file_header::CryptoFamily, CompositeKey, EncryptedKeyParts, LibsodiumCryptoFamily,
+    ProtectedHeader, RyptFileHeader, SenderAuthType,
 };
 use crate::shamir::{self, SecretShareError};
 use crate::stream_crypto::CryptoSystemAEADCodec;
@@ -25,6 +25,7 @@ use crate::stream_pipeline::StreamConverter;
 use crate::util::{serialize_proto, xor_vec};
 
 const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
+const MAX_CHUNK_SIZE: usize = 1024 * 1024 * 1024;
 const ENCRYPTED_HEADER_NONCE: &AEADNonce = b"rypt header\0";
 const KDF_SALT_NONCE: &HMacKey = b"rypt kdf salt\0                  ";
 const SYMMETRIC_SECRET_NONCE: &HMacKey = b"rypt symmetric secret\0          ";
@@ -32,7 +33,6 @@ const RECIPIENT_NONCE: &AEADNonce = b"ryptrecp\0\0\0\0"; // Zeros will be replac
 const RECIP_IDX_POS: usize = AEAD_NONCE_LEN - size_of::<u32>(); // Put recipient index in the last 4 bytes.
 const RECIPIENT_BOX_NONCE: &BoxNonce = b"rypt recipient      \0\0\0\0"; // Zeros will be replaced with recip_idx
 const RECIP_BOX_IDX_POS: usize = BOX_NONCE_LEN - size_of::<u32>(); // Put recipient index in the last 4 bytes.
-const COMPATIBILITY_VERSION: FormatVersion = FormatVersion::BasicEncryption;
 
 /// Create CryptoFamily enum (protobuf) based on command line options.
 fn cryptofamily_from_opts(opts: &EncryptOptions) -> Option<CryptoFamily> {
@@ -206,8 +206,6 @@ fn encrypt_composite_key(
 pub fn encrypt_header(
     opts: &EncryptOptions,
 ) -> Fallible<(Vec<u8>, Box<dyn StreamConverter>, usize)> {
-    let version = FormatVersion::BasicEncryption.into();
-
     let crypto_family = cryptofamily_from_opts(&opts);
     let cryptosys = cryptosys_from_proto(&crypto_family)?;
 
@@ -220,17 +218,15 @@ pub fn encrypt_header(
     let payload_key = cryptosys.aead_keygen();
     let (ephemeral_pk, ephemeral_sk) = cryptosys.generate_keypair();
 
-    // Encrypted header data
-    let sender_auth_type = SenderAuthType::Anonymous;
-    let sender_pk = PublicKey::default();
-    let encrypted_header = EncryptedHeader {
+    // Protected header data. Only Anonymous authentication is supported for now.
+    let protected_header = ProtectedHeader {
         plaintext_chunk_size: chunk_size as u64,
-        sender_auth_type: sender_auth_type.into(),
-        sender_pk: sender_pk.to_vec(),
+        sender_auth_type: SenderAuthType::Anonymous.into(),
+        sender_pk: ephemeral_pk.to_vec(),
     };
 
-    let encrypted_header_data = cryptosys.aead_encrypt_easy(
-        &serialize_proto(&encrypted_header)?,
+    let protected_header = cryptosys.aead_encrypt_easy(
+        &serialize_proto(&protected_header)?,
         &payload_key,
         ENCRYPTED_HEADER_NONCE,
     );
@@ -245,14 +241,12 @@ pub fn encrypt_header(
         &mut 0,
     )?;
 
-    // Gather all the data and create FileHeader
-    let header = FileHeader {
-        version,
+    // Gather all the data and create RyptFileHeader protobuf
+    let header = RyptFileHeader {
         crypto_family,
         ephemeral_pk: ephemeral_pk.to_vec(),
         payload_key: Some(encrypted_payload_key),
-        encrypted_header_data,
-        associated_data: opts.associated_data.clone(),
+        protected_header,
     };
     let serialized_header = serialize_proto(&header)?;
     let header_hash = cryptosys.hash(&serialized_header);
@@ -398,13 +392,8 @@ pub fn decrypt_header(
     serialized_header: &[u8],
     opts: &DecryptOptions,
 ) -> Fallible<(Box<dyn StreamConverter>, usize)> {
-    let header: FileHeader = FileHeader::decode(serialized_header)
+    let header = RyptFileHeader::decode(serialized_header)
         .with_context(|e| format!("Invalid header protobuf: {}", e))?;
-
-    ensure!(
-        header.version <= COMPATIBILITY_VERSION.into(),
-        "Can't decrypt this file - it's too new."
-    );
 
     let cryptosys = cryptosys_from_proto(&header.crypto_family)?;
     let ephemeral_pk: PublicKey = header.ephemeral_pk.as_slice().try_into()?;
@@ -426,19 +415,29 @@ pub fn decrypt_header(
 
     let payload_key: AEADKey = payload_key.as_slice().try_into()?;
 
-    let encrypted_header_buf = cryptosys.aead_decrypt_easy(
-        &header.encrypted_header_data,
+    let protected_header = cryptosys.aead_decrypt_easy(
+        &header.protected_header,
         &payload_key,
         ENCRYPTED_HEADER_NONCE,
     )?;
-    let encrypted_header: EncryptedHeader = EncryptedHeader::decode(&encrypted_header_buf)
+    let protected_header: ProtectedHeader = ProtectedHeader::decode(&protected_header)
         .with_context(|e| format!("Invalid encrypted header protobuf: {}", e))?;
 
-    let chunk_size = encrypted_header.plaintext_chunk_size as usize;
-    ensure!(
-        chunk_size <= cryptosys.aead_max_message_size(),
-        "Chunk size too large - not supported by the encryption algorithm"
-    );
+    let chunk_size = protected_header.plaintext_chunk_size as usize;
+    ensure!(chunk_size <= MAX_CHUNK_SIZE, "Chunk size too large");
+
+    // Check sender_auth_type, even though we only support anonymous.
+    match SenderAuthType::from_i32(protected_header.sender_auth_type) {
+        Some(SenderAuthType::Anonymous) => {
+            ensure!(
+                protected_header.sender_pk == header.ephemeral_pk,
+                "Invalid encrypted header protobuf: wrong sender_pk"
+            );
+        }
+        _ => {
+            bail!("Unknown sender authentication type");
+        }
+    }
 
     let header_hash = cryptosys.hash(&serialized_header);
     let codec = Box::new(CryptoSystemAEADCodec::new(
