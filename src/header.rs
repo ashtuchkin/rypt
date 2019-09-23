@@ -4,6 +4,7 @@ use std::mem::size_of;
 
 use failure::{bail, ensure, err_msg, Fallible, ResultExt};
 use prost::Message;
+use rand::Rng;
 use static_assertions::const_assert_eq;
 
 use crate::commands::{DecryptOptions, EncryptOptions};
@@ -13,7 +14,7 @@ use crate::crypto::{
     CryptoSystem, CryptoSystemRng, HMacKey, KdfSalt, PrivateKey, PublicKey, AEAD_MAC_LEN,
     AEAD_NONCE_LEN, BOX_MAC_LEN, BOX_NONCE_LEN, KDF_SALT_LEN,
 };
-use crate::header_io::MAX_HEADER_LEN;
+use crate::header_io::{FILE_ALIGNMENT, MAX_HEADER_LEN};
 use crate::proto::rypt::{
     encrypted_key_parts::KeyData, libsodium_crypto_family::AeadAlgorithm,
     rypt_file_header::CryptoFamily, CompositeKey, EncryptedKeyParts, LibsodiumCryptoFamily,
@@ -25,6 +26,7 @@ use crate::stream_pipeline::StreamConverter;
 use crate::util::{serialize_proto, xor_vec};
 
 const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
+const DEFAULT_CHUNK_SIZE_UNCERTAINTY: usize = 4096;
 const MAX_CHUNK_SIZE: usize = 1024 * 1024 * 1024;
 const ENCRYPTED_HEADER_NONCE: &AEADNonce = b"rypt header\0";
 const KDF_SALT_NONCE: &HMacKey = b"rypt kdf salt\0                  ";
@@ -203,17 +205,30 @@ fn encrypt_composite_key(
     })
 }
 
+fn check_chunk_size(chunk_size: usize) -> Fallible<()> {
+    ensure!(
+        chunk_size <= MAX_CHUNK_SIZE,
+        "Invalid chunk size: too large"
+    );
+    ensure!(
+        chunk_size % FILE_ALIGNMENT == 0,
+        "Invalid chunk size: not divisible by file alignment"
+    );
+    Ok(())
+}
+
 pub fn encrypt_header(
     opts: &EncryptOptions,
 ) -> Fallible<(Vec<u8>, Box<dyn StreamConverter>, usize)> {
     let crypto_family = cryptofamily_from_opts(&opts);
     let cryptosys = cryptosys_from_proto(&crypto_family)?;
 
-    let chunk_size = DEFAULT_CHUNK_SIZE;
-    ensure!(
-        chunk_size <= cryptosys.aead_max_message_size(),
-        "Chunk size too large - not supported by the encryption algorithm"
-    );
+    // Add some uncertainty to the chunk size, while keeping 8-byte alignment.
+    let chunk_size = DEFAULT_CHUNK_SIZE - DEFAULT_CHUNK_SIZE_UNCERTAINTY
+        + CryptoSystemRng::new(&*cryptosys)
+            .gen_range(0, 2 * DEFAULT_CHUNK_SIZE_UNCERTAINTY / FILE_ALIGNMENT)
+            * FILE_ALIGNMENT;
+    check_chunk_size(chunk_size)?;
 
     let payload_key = cryptosys.aead_keygen();
     let (ephemeral_pk, ephemeral_sk) = cryptosys.generate_keypair();
@@ -424,7 +439,7 @@ pub fn decrypt_header(
         .with_context(|e| format!("Invalid encrypted header protobuf: {}", e))?;
 
     let chunk_size = protected_header.plaintext_chunk_size as usize;
-    ensure!(chunk_size <= MAX_CHUNK_SIZE, "Chunk size too large");
+    check_chunk_size(chunk_size)?;
 
     // Check sender_auth_type, even though we only support anonymous.
     match SenderAuthType::from_i32(protected_header.sender_auth_type) {

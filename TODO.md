@@ -2,6 +2,7 @@
  * Don't print errors on -qq
  * Check carefully decoding path, with the assumption that attacker changes it.
    * Assert all decoded payload keys are same 
+   * Review all nonces
  * Input/output file management:
     *   copy attributes from the replaced file (owner, group, perms, access/mod times)
     * Warning and skip if: symlink, non-file, multiple hardlinks
@@ -39,9 +40,7 @@
    metadata (which might be a good thing anyway)
  * Sender signature and repudiable verification
  * Harden against information leaks:
-   * Version might be tricky - it leaks potentially secret info about file. 
    * Avoid leaking information about file length by adding random padding, likely in the beginning. ~1 kb to 1 mb or 3%
-   * Randomize chunk length
    * Pad encrypted header to 1kb?
  * Review how we keep secret keys in memory and clean it up (see sodium_mlock/sodium_munlock and sodium_memzero)
    * E.g. maybe use crypto_aead_aes256gcm_beforenm to create state from key and then forget it?

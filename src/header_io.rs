@@ -6,7 +6,7 @@ use failure::{ensure, Fallible};
 pub const MAX_HEADER_LEN: usize = std::u32::MAX as usize; // 4 Gb should be enough.
 const FILE_SIGNATURE_LEN: usize = 4;
 const FILE_SIGNATURE: &[u8; FILE_SIGNATURE_LEN] = b"rypt";
-const FILE_ALIGNMENT: usize = 8;
+pub const FILE_ALIGNMENT: usize = 8;
 const PREHEADER_LEN: usize = FILE_SIGNATURE_LEN + std::mem::size_of::<u32>();
 
 // Returns the number of bytes we need to add to `len` to make it divisible by `alignment`.
