@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 
 use failure::{ensure, Fallible};
 
-pub const MAX_HEADER_LEN: usize = 1_000_000;
+pub const MAX_HEADER_LEN: usize = std::u32::MAX as usize; // 4 Gb should be enough.
 const FILE_SIGNATURE_LEN: usize = 4;
 const FILE_SIGNATURE: &[u8; FILE_SIGNATURE_LEN] = b"rypt";
 const FILE_ALIGNMENT: usize = 8;
