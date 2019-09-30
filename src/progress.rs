@@ -16,26 +16,24 @@ const PROGRESS_VERBOSITY: i32 = 0;
 
 pub struct ProgressPrinter<'a> {
     ui: &'a dyn UI,
-    do_print: bool,
     start_time: Instant,
     stamps: VecDeque<(Instant, usize)>,
     last_printed_period: i64,
-    printed_at_least_once: bool,
+    printed_progress_at_least_once: bool,
     filesize: Option<usize>,
     written_bytes: usize,
 }
 
 impl ProgressPrinter<'_> {
-    pub fn new(ui: &dyn UI, force_silence: bool) -> ProgressPrinter<'_> {
+    pub fn new(ui: &dyn UI) -> ProgressPrinter<'_> {
         let now = Instant::now();
         ProgressPrinter {
             ui,
-            do_print: ui.will_print(PROGRESS_VERBOSITY) && !force_silence,
             start_time: now,
             stamps: VecDeque::from_iter(vec![(now, 0usize)].into_iter()),
             last_printed_period: -1,
             filesize: None,
-            printed_at_least_once: false,
+            printed_progress_at_least_once: false,
             written_bytes: 0,
         }
     }
@@ -64,9 +62,6 @@ impl ProgressPrinter<'_> {
     }
 
     pub fn print_progress(&mut self, written_bytes: usize) {
-        if !self.do_print {
-            return;
-        }
         self.written_bytes += written_bytes;
         let now = Instant::now();
         let elapsed = now - self.start_time;
@@ -81,11 +76,11 @@ impl ProgressPrinter<'_> {
                 self.stamps.pop_front();
             }
 
-            self.print_progress_line();
+            self.print_progress_line(false);
         }
     }
 
-    fn print_progress_line(&mut self) {
+    fn print_progress_line(&mut self, is_final: bool) {
         // Calculate the average over the last KEEP_STAMPS_COUNT periods.
         let mut speed = None;
         let (end_period_time, end_period_progress) = *self.stamps.back().unwrap();
@@ -119,8 +114,10 @@ impl ProgressPrinter<'_> {
 
         // Write the progress line
         let s = Self::format_progress_line(written_bytes, self.filesize, speed, eta);
-        self.ui.print_overwrite_line(PROGRESS_VERBOSITY, &s).ok();
-        self.printed_at_least_once = true;
+        self.ui
+            .println_progress(PROGRESS_VERBOSITY, &s, is_final)
+            .ok();
+        self.printed_progress_at_least_once = true;
     }
 
     fn format_progress_line(
@@ -152,9 +149,8 @@ impl ProgressPrinter<'_> {
 
 impl Drop for ProgressPrinter<'_> {
     fn drop(&mut self) {
-        if self.do_print && self.printed_at_least_once {
-            self.print_progress_line();
-            self.ui.println(PROGRESS_VERBOSITY, "").ok();
+        if self.printed_progress_at_least_once {
+            self.print_progress_line(true);
         }
     }
 }

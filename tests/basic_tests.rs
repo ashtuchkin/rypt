@@ -137,7 +137,7 @@ fn public_key_file_encrypt_decrypt() -> Fallible<()> {
     // 1. Generate public/private key pair
     let private_key_path = util::temp_filename(rng, "key");
     let public_key_path = private_key_path.with_extension("pub");
-    let output = util::main_cmd(&["-g", private_key_path.to_str().unwrap()])?.output()?;
+    let output = util::main_cmd(&["-g", private_key_path.to_str().unwrap(), "-q"])?.output()?;
     assert_eq!(std::str::from_utf8(&output.stdout)?, "");
     assert_eq!(std::str::from_utf8(&output.stderr)?, "");
     assert!(output.status.success());
@@ -335,5 +335,14 @@ fn max_threshold_encrypt_decrypt() -> Fallible<()> {
     assert_eq!(decoded_contents, contents);
     assert!(!temp_file_path_enc.exists()); // Encrypted file should be removed.
 
+    Ok(())
+}
+
+#[test]
+fn extra_quiet() -> Fallible<()> {
+    let output = util::main_cmd(&["-qq", "abc"])?.output()?;
+    assert!(!output.status.success());
+    assert_eq!(std::str::from_utf8(&output.stdout)?, "");
+    assert_eq!(std::str::from_utf8(&output.stderr)?, "");
     Ok(())
 }

@@ -1,3 +1,5 @@
+use std::env;
+
 use rypt::{
     self,
     errors::CompositeError,
@@ -10,26 +12,26 @@ fn main() {
     // Some OS-s need special initialization code for console to behave correctly.
     init_console();
 
-    // Grab all stdio streams, check if whether they are tty and convert to Reader/Writer interface.
+    // Grab all stdio streams, check if whether they are tty and convert to Reader/Writer traits.
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
-    let stdin_is_tty = is_tty(&stdin);
-    let stdout_is_tty = is_tty(&stdout);
-    let stderr_is_tty = is_tty(&stderr);
+    let stdin_is_tty = is_tty(&stdin) || env::var("RYPT_STDIN_TTY_OVERRIDE").is_ok();
+    let stdout_is_tty = is_tty(&stdout) || env::var("RYPT_STDOUT_TTY_OVERRIDE").is_ok();
+    let stderr_is_tty = is_tty(&stderr) || env::var("RYPT_STDERR_TTY_OVERRIDE").is_ok();
     let stdin: Reader = Box::new(stdin);
     let stdout: Writer = Box::new(stdout);
     let stderr: Writer = Box::new(stderr);
 
     // Get program name and command line args
-    let mut args = std::env::args_os();
+    let mut args = env::args_os();
     let program_name = args
         .next()
         .and_then(|s| s.into_string().ok())
         .unwrap_or_else(|| rypt::PKG_NAME.into());
     let cmdline_args = args.collect::<Vec<_>>();
 
-    // Create a terminal UI structure that is responsible for printing messages/errors and prompting
+    // Create a terminal UI object that is responsible for printing messages/errors and prompting
     // user for information like passwords. Initially it owns both Stdin and Stderr, but later
     // Stdin can be taken away to be used as an encryption/decryption input.
     let mut ui = BasicUI::new(program_name, stdin, stdin_is_tty, stderr, stderr_is_tty);
@@ -48,6 +50,7 @@ fn main() {
         stdin_is_tty,
         open_stdout,
         stdout_is_tty,
+        stderr_is_tty,
         &mut ui,
     );
 

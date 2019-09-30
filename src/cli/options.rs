@@ -37,7 +37,7 @@ pub fn define_crypt_options(options: &mut Options) {
         .optflag(
             "",
             "fast",
-            "use a faster encryption algorithm that is only supported on newer x86 processors (AES256-GCM)",
+            "use AES256-GCM, a faster encryption algorithm only supported on newer x86 CPUs; run `rypt -V` to check",
         )
         .optflag(
             "K",
@@ -72,8 +72,7 @@ pub fn define_credential_options(options: &mut Options) {
         .optflagmulti(
             "p",
             "password",
-            "prompt for one password interactively; specify several times for multiple passwords; \
-             default if no other credentials provided",
+            "prompt for one password interactively; specify several times for multiple passwords",
         )
         .optmulti(
             "",

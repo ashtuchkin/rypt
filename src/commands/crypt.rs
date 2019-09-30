@@ -25,7 +25,7 @@ pub fn crypt_streams(
         let res = (|| {
             let InputOutputStream { input, output } = io_stream;
 
-            let mut progress_printer = ProgressPrinter::new(ui, opts.plaintext_on_tty);
+            let mut progress_printer = ProgressPrinter::new(ui);
             progress_printer.print_file_header(
                 &input.path(),
                 output.as_ref().ok().map(|s| s.path()),

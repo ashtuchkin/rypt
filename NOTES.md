@@ -64,7 +64,45 @@ Note, a lot of the information here is stale. Don't rely on it for anything.
      `./rypt: Warning: Private keys should not be passed in when encrypting (forced)`
      `./rypt: Error creating 'target/abc': File exists (os error 17) (pass -f to force)` 
      `./rypt: Invalid or insufficient credentials`
-      
+   * Use cases:
+     * Direct call from the shell -> everything is TTY
+     * Shell pipe -> stderr is TTY; stdin/out are not
+     * Script -> unknown. can be tty, redirection or pipe
+   * TTY Cases (e.g. '+-?' corresponds to stdin is TTY, stdout is not TTY, stderr is ANY):
+     * regular file(s)
+       * +?+ -> TTY usage. Yes prompts, Yes passwords, Yes file headers, Yes progress, Yes warnings, Yes errors.
+       * -?+ -> ?no stdin.  No prompts,  No passwords,  Yes file headers, Yes progress, Yes warnings, Yes errors.
+       * ??- -> no stderr. No prompts,  No passwords,  No file headers,  No progress, Yes warnings, Yes errors.
+       
+     * encode stdin to stdout (binary):
+       * ?+? -> Error, can't output binary to TTY (can be --force-d though)
+       * +-+ -> Text from TTY. No prompts, Yes passwords, Yes? file headers (prompt), No progress, Yes warnings, Yes errors. 
+       * +-- -> ?Text from TTY. No prompts, No passwords, No file headers, No progress, Yes warnings, Yes errors. 
+       * --? -> Pipe usage.    No prompts, No passwords, No file headers, No progress, Yes warnings, Yes errors.
+     * decode stdin (binary) to stdout:
+       * +?? -> Error, can't read binary from TTY (can be --force-d though)
+       * -++ -> Print to TTY. No prompts, No passwords, Yes file headers, No progress, Yes warnings, Yes errors.
+       * -+- -> ?Print to TTY. No prompts, No passwords, No file headers, No progress, Yes warnings, Yes errors.
+       * --? -> Pipe usage.   No prompts, No passwords, No file headers, No progress, Yes warnings, Yes errors.
+       
+     * encode stream to stdout (binary):
+       * ?+? -> Error, can't output binary to TTY (can be --force-d though)
+       * +-+ -> TTY usage.   Yes prompts, Yes passwords, Yes? file headers, Yes progress, Yes warnings, Yes errors. 
+       * --+ -> ?no stdin.    No prompts, No passwords, ? file headers,  No progress, Yes warnings, Yes errors. 
+       * +-- -> ?script usage.No prompts, No passwords, No file headers, No progress, Yes warnings, Yes errors. 
+       * --- -> ?Script usage. No prompts, No passwords, No file headers, No progress, Yes warnings, Yes errors. 
+     * decode stream to stdout: 
+       * +-+ -> TTY usage.        Yes prompts, Yes passwords, Yes? file headers, Yes progress, Yes warnings, Yes errors.
+       * +++ -> Print out to TTY. Yes prompts, Yes passwords, Yes? file headers, No progress, Yes warnings, Yes errors.
+       * -++ -> ?Print out to TTY. No prompts,   No passwords, Yes? file headers, No progress, Yes warnings, Yes errors.
+       * --+ -> ?No stdin/stdout.  No prompts,   No passwords,   ? file headers, No progress, Yes warnings, Yes errors.
+       * ??- -> Script usage. No prompts,  No passwords,  No file headers,   No progress, Yes warnings, Yes errors. 
+
+     Prompts = stdin is TTY && stderr is TTY && not encode/decode stdin
+     Passwords = stdin is TTY && stderr is TTY 
+     File headers = stderr is TTY && expectedTTY(stdin) && expectedTTY(stdout), where expectedTTY = (isINOUT && isBinary) || isTTY 
+     Progress = File Headers && notmessTTY(stdin) && notmessTTY(stdout), where notmessTTY = not (isINOUT && isTTY)
+     Warnings/errors = Always.
 
 
 ## Public key infrastructure compatibility

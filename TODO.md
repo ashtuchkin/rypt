@@ -1,8 +1,8 @@
 # P0
- * Don't print errors on -qq
  * Check carefully decoding path, with the assumption that attacker changes it.
    * Assert all decoded payload keys are same 
    * Review all nonces
+ * Check private key format
  * Input/output file management:
     *   copy attributes from the replaced file (owner, group, perms, access/mod times)
     * Warning and skip if: symlink, non-file, multiple hardlinks

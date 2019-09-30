@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use failure::{bail, Fallible};
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
@@ -78,10 +79,36 @@ pub fn file_from_buf(val: impl AsRef<[u8]>) -> Fallible<File> {
 
 pub trait CommandExt {
     fn stdin_buf(&mut self, val: impl AsRef<[u8]>) -> Fallible<&mut Self>;
+
+    fn tty_override(
+        &mut self,
+        stdin_is_tty: bool,
+        stdout_is_tty: bool,
+        stderr_is_tty: bool,
+    ) -> &mut Self;
 }
 
 impl CommandExt for Command {
     fn stdin_buf(&mut self, val: impl AsRef<[u8]>) -> Fallible<&mut Self> {
         Ok(self.stdin(file_from_buf(val)?))
+    }
+
+    fn tty_override(
+        &mut self,
+        stdin_is_tty: bool,
+        stdout_is_tty: bool,
+        stderr_is_tty: bool,
+    ) -> &mut Self {
+        let mut cmd = self;
+        if stdin_is_tty {
+            cmd = cmd.env("RYPT_STDIN_TTY_OVERRIDE", "1");
+        }
+        if stdout_is_tty {
+            cmd = cmd.env("RYPT_STDOUT_TTY_OVERRIDE", "1");
+        }
+        if stderr_is_tty {
+            cmd = cmd.env("RYPT_STDERR_TTY_OVERRIDE", "1");
+        }
+        cmd
     }
 }

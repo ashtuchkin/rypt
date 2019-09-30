@@ -7,10 +7,14 @@ use crate::terminal::{set_stdin_echo, TERMINAL_CLEAR_LINE};
 use crate::util::to_hex_string;
 use crate::{Reader, ReaderFactory, Writer};
 
+const ERROR_VERBOSITY: i32 = -1;
+const INTERACTIVE_VERBOSITY: i32 = -1;
+
 // User interaction interface.
 pub trait UI {
     // Initialization
     fn set_verbosity(&mut self, verbosity: i32);
+    fn set_progress_enabled(&mut self, enabled: bool);
 
     // Environment information
     fn program_name(&self) -> &str;
@@ -20,13 +24,10 @@ pub trait UI {
     fn print(&self, verbosity: i32, message: &str) -> Fallible<()>;
     fn print_error(&self, err: &Error) -> Fallible<()>;
     fn println_interactive(&self, message: &str) -> Fallible<()>;
+    fn println_progress(&self, verbosity: i32, message: &str, finish: bool) -> Fallible<()>;
 
     fn println(&self, verbosity: i32, message: &str) -> Fallible<()> {
         self.print(verbosity, &format!("{}\n", message))
-    }
-
-    fn print_overwrite_line(&self, verbosity: i32, message: &str) -> Fallible<()> {
-        self.print(verbosity, &format!("{}{}\r", TERMINAL_CLEAR_LINE, message))
     }
 
     // Read interface
@@ -77,6 +78,7 @@ pub struct BasicUI {
     input_is_tty: bool,
     output_is_tty: bool,
     verbosity: i32,
+    progress_enabled: bool,
 }
 
 impl BasicUI {
@@ -94,6 +96,7 @@ impl BasicUI {
             output: RefCell::new(output),
             output_is_tty,
             verbosity: 0,
+            progress_enabled: true,
         }
     }
 
@@ -108,11 +111,11 @@ impl BasicUI {
 
 impl UI for BasicUI {
     fn set_verbosity(&mut self, verbosity: i32) {
-        if verbosity == 0 {
-            self.verbosity = if self.output_is_tty { 1 } else { -1 };
-        } else {
-            self.verbosity = verbosity;
-        }
+        self.verbosity = verbosity;
+    }
+
+    fn set_progress_enabled(&mut self, enabled: bool) {
+        self.progress_enabled = enabled;
     }
 
     fn program_name(&self) -> &str {
@@ -132,19 +135,35 @@ impl UI for BasicUI {
     }
 
     fn print_error(&self, err: &Error) -> Fallible<()> {
-        writeln!(self.output.borrow_mut(), "{}: {}", self.program_name, err)?;
+        if self.will_print(ERROR_VERBOSITY) {
+            writeln!(self.output.borrow_mut(), "{}: {}", self.program_name, err)?;
+        }
         Ok(())
     }
 
     fn println_interactive(&self, message: &str) -> Fallible<()> {
-        writeln!(self.output.borrow_mut(), "{}", message)?;
+        if self.will_print(INTERACTIVE_VERBOSITY) {
+            writeln!(self.output.borrow_mut(), "{}", message)?;
+        }
+        Ok(())
+    }
+
+    fn println_progress(&self, verbosity: i32, message: &str, finish: bool) -> Fallible<()> {
+        if self.progress_enabled {
+            let last_char = if finish { "\n" } else { "\r" };
+            let message = format!("{}{}{}", TERMINAL_CLEAR_LINE, message, last_char);
+            self.print(verbosity, &message)?;
+        }
         Ok(())
     }
 
     // Read interface
 
     fn can_read(&self) -> bool {
-        self.input.borrow().is_some() && self.input_is_tty && self.output_is_tty
+        self.input.borrow().is_some()
+            && self.input_is_tty
+            && self.output_is_tty
+            && self.will_print(INTERACTIVE_VERBOSITY)
     }
 
     fn read_prompt(&self, prompt: &str) -> Fallible<String> {
@@ -198,6 +217,7 @@ pub mod test_helpers {
         Log { verbosity: i32 },
         Error,
         Interactive,
+        Progress { verbosity: i32, finish: bool },
     }
 
     #[derive(Default)]
@@ -257,6 +277,7 @@ pub mod test_helpers {
 
     impl UI for TestUI {
         fn set_verbosity(&mut self, _verbosity: i32) {}
+        fn set_progress_enabled(&mut self, _enabled: bool) {}
 
         fn program_name(&self) -> &str {
             "rypt"
@@ -277,6 +298,10 @@ pub mod test_helpers {
 
         fn println_interactive(&self, message: &str) -> Result<(), Error> {
             self.append_printed_lines(PrintType::Interactive, message)
+        }
+
+        fn println_progress(&self, verbosity: i32, message: &str, finish: bool) -> Fallible<()> {
+            self.append_printed_lines(PrintType::Progress { verbosity, finish }, message)
         }
 
         // Read interface

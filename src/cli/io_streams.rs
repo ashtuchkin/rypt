@@ -12,10 +12,8 @@ pub(super) fn get_input_output_streams(
     matches: &Matches,
     crypt_direction: CryptDirection,
     open_stdin: ReaderFactory,
-    stdin_is_tty: bool,
     open_stdout: WriterFactory,
-    stdout_is_tty: bool,
-) -> Fallible<(Vec<InputOutputStream>, bool)> {
+) -> Fallible<Vec<InputOutputStream>> {
     let stream_mode = matches.opt_present("s") || matches.free.is_empty() || matches.free == ["-"];
 
     Ok(if stream_mode {
@@ -23,34 +21,17 @@ pub(super) fn get_input_output_streams(
             matches.free.len() <= 1,
             "Streaming mode only supports a single input"
         );
-        let mut plaintext_on_tty = false;
         let input = match matches.free.first().map(String::as_str) {
-            None | Some("-") => {
-                if stdin_is_tty {
-                    match crypt_direction {
-                        CryptDirection::Decrypt => {
-                            bail!("Encrypted data cannot be read from a terminal.")
-                        }
-                        CryptDirection::Encrypt => plaintext_on_tty = true,
-                    }
-                }
-                InputStream::Stdin { open_stdin }
-            }
+            None | Some("-") => InputStream::Stdin { open_stdin },
             // NOTE: In theory, `path` could point to stdin (e.g. '/dev/stdin'), in which case
             // ideally we need to replicate the logic above that checks that we don't print binary
             // data to TTY. In practice, though, we ignore this case as it's hard to do correctly.
             Some(path) => InputStream::FileStream { path: path.into() },
         };
 
-        if stdout_is_tty {
-            match crypt_direction {
-                CryptDirection::Encrypt => bail!("Encrypted data cannot be written to a terminal"),
-                CryptDirection::Decrypt => plaintext_on_tty = true,
-            }
-        }
         let output = Ok(OutputStream::Stdout { open_stdout });
 
-        (vec![InputOutputStream { input, output }], plaintext_on_tty)
+        vec![InputOutputStream { input, output }]
     } else {
         if matches.free.iter().any(|s| s.trim() == "-") {
             bail!("Stdin/stdout designator '-' can only be specified once and no other files can be processed at the same time.");
@@ -80,7 +61,7 @@ pub(super) fn get_input_output_streams(
         //            return Err(io_stream.output.unwrap_err());
         //        }
 
-        (io_streams, false)
+        io_streams
     })
 }
 

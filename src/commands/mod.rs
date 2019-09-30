@@ -46,10 +46,6 @@ pub enum InputCleanupPolicy {
 pub struct CryptOptions {
     // Whether we keep or delete input files after successful encryption/decryption.
     pub input_cleanup_policy: InputCleanupPolicy,
-
-    // Whether plaintext is entered on TTY when encrypting or printed to TTY when decrypting.
-    // Currently makes ProgressPrinter quiet, so that the text is not garbled.
-    pub plaintext_on_tty: bool,
 }
 
 #[derive(Debug)]

@@ -79,8 +79,8 @@ impl LibSodiumCryptoSystem {
         let libsodium_version =
             unsafe { std::ffi::CStr::from_ptr(libsodium_sys::sodium_version_string()) };
         let suffix = match Self::new(AEADAlgorithm::AES256GCM) {
-            Ok(_) => "AES256-GCM Supported",
-            Err(CryptoInstantiationError::HardwareUnsupported) => "AES256-GCM NOT Supported",
+            Ok(_) => "AES256-GCM is supported",
+            Err(CryptoInstantiationError::HardwareUnsupported) => "AES256-GCM is NOT supported",
             Err(_) => "Library initialization error",
         };
 

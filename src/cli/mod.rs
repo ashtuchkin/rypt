@@ -8,7 +8,7 @@ use crate::commands::{
     Command, CryptDirectionOpts, CryptOptions, DecryptOptions, EncryptOptions,
     GenerateKeyPairOptions, InputCleanupPolicy,
 };
-use crate::io_streams::OutputStream;
+use crate::io_streams::{InputOutputStream, InputStream, OutputStream};
 use crate::ui::UI;
 use crate::{ReaderFactory, WriterFactory};
 use std::ffi::OsStr;
@@ -64,6 +64,7 @@ pub fn parse_command_line(
     stdin_is_tty: bool,
     open_stdout: WriterFactory,
     stdout_is_tty: bool,
+    stderr_is_tty: bool,
     ui: &mut dyn UI,
 ) -> Fallible<Command> {
     let options = options::define_all_options();
@@ -86,13 +87,17 @@ pub fn parse_command_line(
 
     Ok(match mode {
         OperationMode::Crypt(crypt_direction) => {
-            let (streams, plaintext_on_tty) = get_input_output_streams(
-                &matches,
+            let streams =
+                get_input_output_streams(&matches, crypt_direction, open_stdin, open_stdout)?;
+
+            check_and_adjust_ui_verbosity(
+                ui,
+                verbosity,
+                &streams,
                 crypt_direction,
-                open_stdin,
                 stdin_is_tty,
-                open_stdout,
                 stdout_is_tty,
+                stderr_is_tty,
             )?;
 
             let input_cleanup_policy = match (
@@ -109,7 +114,6 @@ pub fn parse_command_line(
                 streams,
                 CryptOptions {
                     input_cleanup_policy,
-                    plaintext_on_tty,
                 },
                 match crypt_direction {
                     CryptDirection::Encrypt => CryptDirectionOpts::Encrypt(EncryptOptions {
@@ -129,4 +133,75 @@ pub fn parse_command_line(
         OperationMode::Help => Command::Help(OutputStream::Stdout { open_stdout }),
         OperationMode::Version => Command::Version(OutputStream::Stdout { open_stdout }),
     })
+}
+
+// Rules of verbosity adjustment:
+// 1. Only adjust if verbosity is not provided directly via -v and -q flags (verbosity == 0)
+// 2. Make output more verbose (verbosity == 1) if all of stdin, stdout, stderr are TTY - we take
+//    that as a sign that we're being called from TTY. Otherwise, make it less verbose (-1).
+//   2a. Exception - if stdin is used as decryption input or stdout is used as encryption
+//       output (binary streams), ignore the fact that they are not TTY. We require user to redirect
+//       these streams, so still make output more verbose if the remaining streams are TTY.
+// 3. Show progress if output is verbose (item 2 above) and progress messages won't mess up with
+//    TTY stdin/stdout. We do want to support e.g. encryption of messages that user types directly
+//    (stdin is TTY), and progress messages would get in the way.
+fn check_and_adjust_ui_verbosity(
+    ui: &mut dyn UI,
+    verbosity: i32,
+    streams: &[InputOutputStream],
+    crypt_direction: CryptDirection,
+    stdin_is_tty: bool,
+    stdout_is_tty: bool,
+    stderr_is_tty: bool,
+) -> Fallible<()> {
+    let mut stdin_is_data = false;
+    let mut stdout_is_data = false;
+    let mut stdin_is_binary = false;
+    let mut stdout_is_binary = false;
+
+    if streams.len() == 1 {
+        if let InputStream::Stdin { .. } = streams[0].input {
+            stdin_is_data = true;
+            stdin_is_binary = crypt_direction == CryptDirection::Decrypt;
+        }
+        if let Ok(OutputStream::Stdout { .. }) = streams[0].output {
+            stdout_is_data = true;
+            stdout_is_binary = crypt_direction == CryptDirection::Encrypt;
+        }
+    }
+
+    if stdin_is_tty && stdin_is_binary {
+        bail!("Encrypted data cannot be read from a terminal.");
+    }
+    if stdout_is_tty && stdout_is_binary {
+        bail!("Encrypted data cannot be written to a terminal");
+    }
+
+    if verbosity == 0 {
+        fn expected_tty(is_tty: bool, is_binary: bool) -> bool {
+            is_tty || is_binary
+        }
+
+        fn not_mess_up_tty(is_tty: bool, is_data: bool) -> bool {
+            !(is_data && is_tty)
+        }
+
+        let increase_verbosity = stderr_is_tty
+            && expected_tty(stdin_is_tty, stdin_is_binary)
+            && expected_tty(stdout_is_tty, stdout_is_binary);
+
+        if increase_verbosity {
+            ui.set_verbosity(1);
+        } else {
+            ui.set_verbosity(-1);
+        }
+
+        let show_progress_bar = increase_verbosity
+            && not_mess_up_tty(stdin_is_tty, stdin_is_data)
+            && not_mess_up_tty(stdout_is_tty, stdout_is_data);
+
+        ui.set_progress_enabled(show_progress_bar);
+    }
+
+    Ok(())
 }

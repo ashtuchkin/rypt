@@ -1,48 +1,59 @@
 <!-- TODO: build badges -->
 
-⚠️⚠️⚠️ **This tool is not ready to use in production yet. Please wait until version 1.0.** ⚠️⚠️⚠️
-
-
-# Rypt: command line encryption tool
- * Encrypt/decrypt files and streams using password or a public/private key pair(s).
- * Secure, modern cryptographic defaults. Hard to screw up (see details below).
- * Based on [libsodium](https://libsodium.gitbook.io/doc/), industry-standard cryptographic primitive library.
+# Rypt: versatile command-line encryption tool
+ * Encrypt/decrypt files and streams using password(s), public/private key pair(s) and combinations of these.
+ * Uses secure, modern cryptographic primitives provided by [libsodium](https://libsodium.gitbook.io/doc/).  
  * Written in [Rust](https://www.rust-lang.org/), efficient and memory-safe programming language.
- * Tamper-resistant / authenticated encryption: any change to encrypted files would make them invalid.
- * Standalone tool: does not depend on any commercial services / clouds.
- * Supports advanced use cases like multiple recipients, passwords, [(t, n)-threshold scheme](https://en.wikipedia.org/wiki/Secret_sharing).
- * Fast. ~1.1 Gb/s on my 2013 MacBook using AES256-GCM algorithm. Usually hard drive speed is the limiting factor.
+ * Uses authenticated encryption: any change to encrypted files would make them invalid.
+ * Offline, standalone tool that does not depend on any commercial services / clouds.
+ * Supports advanced use cases like multiple passwords/public keys, [key threshold schemes](https://en.wikipedia.org/wiki/Secret_sharing) and more.
+ * Fast. ~1.1 Gb/s on a 2013 MacBook using AES256-GCM algorithm. Usually I/O bandwidth is the limiting factor.
  * Easy to use at both beginner and advanced level (see examples below).
- * Lightweight: <1 Mb binary; <10 Mb memory used when encrypting/decrypting (unless required by password derivation functions).
- * Operating System Support: GNU/Linux, MacOS. Windows support is planned. See "Installation" section below for details.
- * Open source. License: MIT.
+ * Lightweight: ~1 Mb binary size; <10 Mb memory used (except if required by password derivation functions).
+ * Operating System Support: x86 Linux, MacOS, Windows.
+ * Open source, MIT license.
 
 ## Examples
 ```bash
-$ rypt my-secret-file.txt
-NOTE: Original file will be deleted after a succesful encryption. Pass -k to keep it.
-Enter password: *******
-Enter password again: *******
+$ # Basic use case: encrypt/decrypt file with a password
+$ rypt secret-interview.mp4 
+Enter password: 
+Confirm password: 
 
-Encrypting my-secret-file.txt -> my-secret-file.txt.rypt (1/1)
-   100.0 %       1.12 MiB
+secret-interview.mp4 -> secret-interview.mp4.rypt (1/1)
+   100.0 %       1.46 GiB     310.18 MiB/s   ETA  0:00s
 
-$ rypt -d my-secret-file.txt.rypt
-NOTE: Encrypted file will be deleted after a succesful decryption. Pass -k to keep it.
-Enter password: *******
+Remove original file(s)? [y/N]: y
 
-Decrypting my-secret-file.txt.rypt -> my-secret-file.txt (1/1)
-   100.0 %       1.12 MiB
+$ rypt -d secret-interview.mp4.rypt 
+Enter password: 
 
-# Advanced use case: upload a public-key-encrypted compressed archive to S3
-$ tar c . | xz | rypt --recipient recipent-key.pub | aws s3 cp - s3://mybucket/archive.xz.rypt
+secret-interview.mp4.rypt -> secret-interview.mp4 (1/1)
+   100.0 %       1.46 GiB     320.48 MiB/s   ETA  0:00s
 
+Remove original file(s)? [y/N]: y
 
+$ # Advanced examples: generate public/private key pair
+$ rypt -g recipient-key
+Keypair 1/1:
+    Public key: 8bF9648A4C7705E3276795901819Dfe734fa62Df587CF7dB27a17D6FD0d5012c
+    Public key file: recipient-key.pub
+    Private key file: recipient-key
+
+$ # Upload a public-key-encrypted compressed archive to S3
+$ tar c . | xz | rypt --public-key recipient-key.pub | aws s3 cp - s3://mybucket/archive.xz.rypt
+
+$ # Then download it, decrypt and unpack
+$ aws s3 cp s3://mybucket/archive.xz.rypt - | rypt -d --private-key recipient-key | xz -d | tar x
 ```
 
 ## Installation
-Download the latest binary in the [Releases](https://github.com/ashtuchkin/rypt/releases) section.
+### Download binary
+See the [Releases](https://github.com/ashtuchkin/rypt/releases) section.
 
+### From source
+ 1. Install Rust: https://www.rust-lang.org/tools/install
+ 2. `cargo install rypt`
 
 ## Why not use existing tools?
  * PGP: Large installation; cumbersome (--symmetric?); old algorithms (AES128 in CFB mode); slow (TODO: numbers); no proper password derivation, no full-file authentication.
