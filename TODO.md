@@ -2,7 +2,7 @@
  * Check carefully decoding path, with the assumption that attacker changes it.
    * Assert all decoded payload keys are same 
    * Review all nonces
- * Check private key format
+ * Check extension points: cryptosys, public/private key types/formats, rypt file format enhancements like concat / hardening.
  * Input/output file management:
     *   copy attributes from the replaced file (owner, group, perms, access/mod times)
     * Warning and skip if: symlink, non-file, multiple hardlinks
@@ -26,9 +26,11 @@
    * "Access Structure"
  * Set up basic packaging, see nice overview here https://rust-lang-nursery.github.io/cli-wg/tutorial/packaging.html
    https://github.com/japaric/trust
+ * Cleanup cargo.toml and publish to cargo.
  * Publish to /r/rust, hacker news.
  
 # P1
+ * Allow giving explicit output file name(s) on command line. Plus, maybe, different output folder. 
  * Handle panics gracefully, redirecting users to report bugs.
  * Weak password warning, using zxcvbn. Can be reentered by pressing 'Enter' on password verify.
  * Add CLI commands to set and show non-encrypted authenticated data, with or without password.
@@ -56,9 +58,20 @@
    atomically make it visible.
  * Check for entropy in the beginning and add warning (see https://libsodium.gitbook.io/doc/usage#sodium_init-stalling-on-linux)
  * Support progress bar on Windows earlier than 10 (see comment in terminal.rs)
+ * Support generating several private keys to stdout
  
 # Undecided / maybe
  * CLI: Add color.
+ * Private keys format:
+   * Include a way to password-protect?
+   * Remove or separate the public key?
+   * Maybe use BIP39 Mnemonic phrase as the private key. See https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki       
+     * This includes the password protection. We'd need to store public key too in that case (otherwise it'll require
+       a password when encrypting and no way to check it).
+     * We can also choose the strength: 128-256 bits using 12-24 words.
+     * Requires wordlist, bit writer, pbkdf2 with hmac-sha512 (not included in libsodium)
+     * https://github.com/maciejhirsz/tiny-bip39  (See https://github.com/infincia/bip39-rs/issues/21)
+ * Support folder encryption natively
  * Multithreaded encryption - possible now, but not sure if needed.
  * Migrate to async reading/writing and futures, plus write a post about that too.
  * Switch to a different Protobuf library which supports Zero-copy mode, to allow larger authenticated data
@@ -81,18 +94,10 @@
    meaningless, only signing the message makes sense.
 
 # Code improvement
- * Tests:
-   * Allow situation when plaintext and password are on tty ('rypt > abc' and 'rypt -sd abc').
-     * In both cases, progress bar should not be shown.
-   * Don't delete existing output files on error.
-   * Keep/delete files on success.
-
- * Exit with error code 1 when there are en/decryption errors.
  * Support "warnings" (e.g. when skipping file) and exit with exit code = 2 if any. 
 
  * Make BasicUI more testable by supplying `set_stdin_echo` from RuntimeEnvironment.
       
- * Maybe Extract UI trait from BasicUI to enable tests.    
  * Maybe Rename Writer -> OwnedWrite?
 
  * In get_input_output_streams, try to get metadata for both input and output files to check their existence/filesize/any errors. 
@@ -101,7 +106,6 @@
    Include crypto system, payload key, header hash, chunk size?; Separately SignatureProfile. Macs, signature private key.
  * Rename header.rs to something more appropriate (credentials?)
  * Unit Tests!
- * Kill types.rs and move its contents probably to stream_pipeline
  * Move add_extension and remove_extension to utils and use them in tests and key generation.
  * Avoid switching on the algorithm in LibSodiumCryptoSystem - do it once.
  * Investigate why build-time deps like 'tar' are getting into release build through libsodium-sys

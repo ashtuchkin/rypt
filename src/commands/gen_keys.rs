@@ -2,6 +2,7 @@ use failure::{Fallible, ResultExt};
 use std::io::Write;
 
 use crate::commands::KeyPairOutputStreams;
+use crate::crypto::{PRIVATE_KEY_LEN, PUBLIC_KEY_LEN};
 use crate::errors::CompositeError;
 use crate::ui::UI;
 use crate::{crypto, util};
@@ -19,10 +20,22 @@ pub fn generate_key_pair_files(streams: Vec<KeyPairOutputStreams>, ui: &dyn UI) 
 
         // Generate the key pair
         // We use hex encoding for both public and private keys. "\n" is added to make it easier to
-        // concat several public/private key files
+        // concat several public/private key files.
+        // For public keys, we additionally use checksumming via lowercase/uppercase hex letters
+        // to provide some feedback about invalid key.
+        // For private keys, we use the fact that they include public keys as the second half.
+        // To make it convenient to manually extract public key from private, we checksum private
+        // and public parts separately. After that, users can use the second half (last 64
+        // characters) of the private key directly as a public key.
         let (public_key, private_key) = cryptosys.generate_keypair();
+
+        // Ensure private key really includes public key at the end.
+        let (real_private_key, public_part_of_private_key) =
+            private_key.split_at(PRIVATE_KEY_LEN - PUBLIC_KEY_LEN);
+        assert_eq!(&*public_key, public_part_of_private_key);
+
         let public_key = util::to_hex_string_checksummed(*public_key) + "\n";
-        let private_key = util::to_hex_string(&*private_key as &[u8]) + "\n";
+        let private_key = util::to_hex_string_checksummed(real_private_key) + &public_key;
 
         // Get the paths before opening the streams
         let private_key_path = private_key_stream.path().to_string_lossy().to_string();

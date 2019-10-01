@@ -6,6 +6,7 @@ use getopts::Matches;
 
 use crate::cli::CryptDirection;
 use crate::credentials::{ComplexCredential, Credential};
+use crate::crypto::{PRIVATE_KEY_LEN, PUBLIC_KEY_LEN};
 use crate::ui::UI;
 use crate::util::{try_parse_hex_string, try_parse_hex_string_checksummed};
 
@@ -298,7 +299,10 @@ fn parse_complex_credential(
                     "Private keys should not be passed in when encrypting"
                 );
                 let creds = read_file_lines(&filename, &|line| {
-                    Ok(Credential::PrivateKey(*from_hex64(line, true)?))
+                    Ok(Credential::PrivateKey(*from_hex64_private_key(
+                        line,
+                        skip_checksum,
+                    )?))
                 })
                 .with_context(|e| format!("Error reading private key file {}: {}", filename, e))?;
                 Some(creds)
@@ -345,32 +349,41 @@ fn parse_complex_credential(
     })
 }
 
-fn from_hex32(line: &str, skip_checksum: bool) -> Fallible<Box<[u8; 32]>> {
-    let bytes = if skip_checksum {
-        try_parse_hex_string(line)?
+fn try_parse_hex(input: &str, skip_checksum: bool) -> Fallible<Vec<u8>> {
+    Ok(if skip_checksum {
+        try_parse_hex_string(input)?
     } else {
-        try_parse_hex_string_checksummed(line)?
-    };
+        try_parse_hex_string_checksummed(input)?
+    })
+}
+
+fn from_hex32(line: &str, skip_checksum: bool) -> Fallible<Box<[u8; 32]>> {
+    let bytes = try_parse_hex(line, skip_checksum)?;
 
     Ok(Box::new(bytes.as_slice().try_into().map_err(|_| {
         format_err!("Invalid key length (we expect 32 bytes, or 64 hex characters)")
     })?))
 }
 
-fn from_hex64(line: &str, skip_checksum: bool) -> Fallible<Box<[u8; 64]>> {
-    let bytes = if skip_checksum {
-        try_parse_hex_string(line)?
-    } else {
-        try_parse_hex_string_checksummed(line)?
-    };
+fn from_hex64_private_key(line: &str, skip_checksum: bool) -> Fallible<Box<[u8; 64]>> {
+    let line = line.replace(char::is_whitespace, "");
     ensure!(
-        bytes.len() == 64,
-        "Invalid key length (we expect 64 bytes, or 128 hex characters)"
+        line.len() == PRIVATE_KEY_LEN * 2,
+        "Invalid private key length (we expect 64 bytes, or 128 hex characters)"
     );
 
-    // [u8; 64] does not support TryInto<&[u8]>, so we do the conversion manually.
+    // Private key includes public key at the end. They are checksummed separately, so we have to
+    // check these checksums separately as well.
+    const PRIVATE_KEY_PART_LEN: usize = PRIVATE_KEY_LEN - PUBLIC_KEY_LEN;
+    let (private_key_part, public_key_part) = line.split_at(PRIVATE_KEY_PART_LEN * 2);
+
+    let private_key_part = try_parse_hex(private_key_part, skip_checksum)?;
+    let public_key_part = try_parse_hex(public_key_part, skip_checksum)?;
+
+    // Convert to Box<[u8; 64]> manually.
     let mut res = Box::new([0u8; 64]);
-    res.copy_from_slice(&bytes);
+    res[..PRIVATE_KEY_PART_LEN].copy_from_slice(&private_key_part);
+    res[PRIVATE_KEY_PART_LEN..].copy_from_slice(&public_key_part);
     Ok(res)
 }
 
