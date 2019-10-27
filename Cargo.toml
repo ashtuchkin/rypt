@@ -1,13 +1,13 @@
 [package]
 name = "rypt"
-version = "0.1.0"
+version = "0.8.0"
 authors = ["Alexander Shtuchkin <ashtuchkin@gmail.com>"]
 edition = "2018"
 
-#description = "..."
-#repository = "..."
-#homepage = "..."
-#documentation = "..."
+description = "Versatile standalone command-line encryption tool"
+repository = "https://github.com/ashtuchkin/rypt"
+homepage = "https://github.com/ashtuchkin/rypt"
+#documentation = "https://github.com/ashtuchkin/rypt"
 
 license = "MIT"
 

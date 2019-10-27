@@ -5,9 +5,6 @@
    * Add info about composite keys to INTERNALS
    * Crypto details, performance, usage, arguments.
    * "Access Structure"
- * Set up basic packaging, see nice overview here https://rust-lang-nursery.github.io/cli-wg/tutorial/packaging.html
-   https://github.com/japaric/trust
- * Cleanup cargo.toml and publish to cargo.
  * Publish to /r/rust, hacker news.
  
 # P1
