@@ -1,10 +1,4 @@
 # P0
- * Tests
-    * Review the code and cover most sensitive areas.
-    * header.rs
-    * Test password handling
-    * '-k, --keep' - keep the original file
-    * '-c, --stdout, --to-stdout' - write to stdout; implies -k
  * Cleanup README, INTERNALS, TODO, header.proto, header.rs to prepare for publishing
    * Explain file mode/stream mode
    * Add gifs that show how command works

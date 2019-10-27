@@ -1,15 +1,15 @@
 <!-- TODO: build badges -->
 
 # Rypt: versatile command-line encryption tool
- * Encrypt/decrypt files and streams using password(s), public/private key pair(s) and combinations of these.
- * Uses secure, modern cryptographic primitives provided by [libsodium](https://libsodium.gitbook.io/doc/).  
+ * Encrypt/decrypt files and streams using passwords, public/private key pairs and complex combinations of these.
+ * Uses modern cryptographic primitives provided by [libsodium](https://libsodium.gitbook.io/doc/).  
  * Written in [Rust](https://www.rust-lang.org/), efficient and memory-safe programming language.
- * Uses authenticated encryption: any change to encrypted files would make them invalid.
+ * 100% Authenticated Encryption: any change to encrypted files would make them invalid.
  * Offline, standalone tool that does not depend on any commercial services / clouds.
  * Supports advanced use cases like multiple passwords/public keys, [key threshold schemes](https://en.wikipedia.org/wiki/Secret_sharing) and more.
  * Fast. ~1.1 Gb/s on a 2013 MacBook using AES256-GCM algorithm. Usually I/O bandwidth is the limiting factor.
  * Easy to use at both beginner and advanced level (see examples below).
- * Lightweight: ~1 Mb binary size; <10 Mb memory used (except if required by password derivation functions).
+ * Lightweight: ~1 Mb binary size; <10 Mb memory used (except as required by password derivation functions).
  * Operating System Support: x86 Linux, MacOS, Windows.
  * Open source, MIT license.
 
@@ -45,6 +45,29 @@ $ tar c . | xz | rypt --public-key recipient-key.pub | aws s3 cp - s3://mybucket
 
 $ # Then download it, decrypt and unpack
 $ aws s3 cp s3://mybucket/archive.xz.rypt - | rypt -d --private-key recipient-key | xz -d | tar x
+
+$ # More advanced examples: encrypt a note from stdin using an any-2-out-of-3 passwords threshold scheme
+$ rypt -p -p -p --key-threshold 2 > encrypted.rypt
+Enter password: 
+Confirm password: 
+
+Enter password: 
+Confirm password: 
+
+Enter password: 
+Confirm password: 
+
+(stdin) -> (stdout) (1/1)
+This is a secret message.
+^D
+$ ./rypt -d -p -p -s encrypted.rypt
+Enter password: 
+
+Enter password: 
+
+encrypted.rypt -> (stdout) (1/1)
+This is a secret message.
+
 ```
 
 ## Installation
