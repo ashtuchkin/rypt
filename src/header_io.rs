@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 
 use failure::{ensure, Fallible};
 
-pub const MAX_HEADER_LEN: usize = std::u32::MAX as usize; // 4 Gb should be enough.
+pub const MAX_HEADER_LEN: usize = 16 * 1024 * 1024; // 16 Mb; to protect from memory pressure.
 const FILE_SIGNATURE_LEN: usize = 4;
 const FILE_SIGNATURE: &[u8; FILE_SIGNATURE_LEN] = b"rypt";
 pub const FILE_ALIGNMENT: usize = 8;
@@ -25,10 +25,11 @@ File structure:
 |--------------------------------------------------|--------------|
 | File signature: ASCII 'rypt'                     | 4 bytes      |
 | Header length, little-endian uint32              | 4 bytes      |
-| Header protobuf                                  | header len   |
-| N x Ciphertext chunk, aligned to 8 bytes         | (chunk_size + asize); last one may be smaller |
+| Header (serialized protobuf)                     | Header len   |
+|   zero-byte padding to 8-byte alignment          | 0-7 bytes    |
+| N x Ciphertext chunk                             | (chunk_size + asize); last one may be smaller |
 
-read_header reads everything until the first chunk; write_header writes it.
+read_header() reads everything up until the first chunk; write_header() writes it.
 */
 
 pub fn read_header(reader: &mut dyn Read) -> Fallible<(Vec<u8>, usize)> {
@@ -44,16 +45,22 @@ pub fn read_header(reader: &mut dyn Read) -> Fallible<(Vec<u8>, usize)> {
     );
 
     // 1b. Decode header length and validate it.
-    let header_len = u32::from_le_bytes(header_len_bytes.try_into()?) as usize;
-    ensure!(header_len > 0, "Header length is zero");
+    let header_len = u32::from_le_bytes(header_len_bytes.try_into().unwrap()) as usize;
+    ensure!(header_len > 0, "Header is empty");
     ensure!(header_len <= MAX_HEADER_LEN, "Header is too large");
     let header_padding = padding_len(header_len, FILE_ALIGNMENT);
+    assert_eq!((header_len + header_padding) % FILE_ALIGNMENT, 0);
 
     // 2. Read serialized header with padding into memory.
     let mut buffer = vec![0u8; header_len + header_padding];
     reader.read_exact(&mut buffer)?;
+    ensure!(
+        buffer[header_len..].iter().all(|b| *b == 0),
+        "Header padding must be zero"
+    );
     buffer.truncate(header_len); // Remove padding
 
+    // Return header buffer and the number of bytes read.
     Ok((buffer, PREHEADER_LEN + header_len + header_padding))
 }
 

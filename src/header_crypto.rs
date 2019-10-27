@@ -27,13 +27,15 @@ use crate::util::{serialize_proto, xor_vec};
 
 const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 const DEFAULT_CHUNK_SIZE_UNCERTAINTY: usize = 4096;
-const MAX_CHUNK_SIZE: usize = 1024 * 1024 * 1024;
-const ENCRYPTED_HEADER_NONCE: &AEADNonce = b"rypt header\0";
-const KDF_SALT_NONCE: &HMacKey = b"rypt kdf salt\0                  ";
-const SYMMETRIC_SECRET_NONCE: &HMacKey = b"rypt symmetric secret\0          ";
-const RECIPIENT_NONCE: &AEADNonce = b"ryptrecp\0\0\0\0"; // Zeros will be replaced with recip_idx
+const MAX_CHUNK_SIZE: usize = 1024 * 1024 * 1024; // 1 Gb max chunk size should be enough for all practical use cases.
+
+// NOTE: We ensure that nonces are all different by making sure constant prefixes are all different.
+const ENCRYPTED_HEADER_NONCE: &AEADNonce = b"rypt enc hdr";
+const KDF_SALT_NONCE: &HMacKey = b"rypt kdf salt\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+const SYMMETRIC_SECRET_NONCE: &HMacKey = b"rypt symmetric secret\0\0\0\0\0\0\0\0\0\0\0";
+const RECIPIENT_NONCE: &AEADNonce = b"ryptrecp####"; // #### will be replaced with recip_idx
 const RECIP_IDX_POS: usize = AEAD_NONCE_LEN - size_of::<u32>(); // Put recipient index in the last 4 bytes.
-const RECIPIENT_BOX_NONCE: &BoxNonce = b"rypt recipient      \0\0\0\0"; // Zeros will be replaced with recip_idx
+const RECIPIENT_BOX_NONCE: &BoxNonce = b"rypt recipient\0\0\0\0\0\0####"; // #### will be replaced with recip_idx
 const RECIP_BOX_IDX_POS: usize = BOX_NONCE_LEN - size_of::<u32>(); // Put recipient index in the last 4 bytes.
 
 /// Create CryptoFamily enum (protobuf) based on command line options.
@@ -54,11 +56,11 @@ fn cryptosys_from_proto(crypto_family: &Option<CryptoFamily>) -> Fallible<Box<dy
             let aead_algorithm = match AeadAlgorithm::from_i32(*aead_algorithm) {
                 Some(AeadAlgorithm::Chacha20poly1305) => AEADAlgorithm::ChaCha20Poly1305Ietf,
                 Some(AeadAlgorithm::Aes256gcm) => AEADAlgorithm::AES256GCM,
-                _ => bail!("Unknown aead algorithm"),
+                _ => bail!("Unknown AEAD algorithm in Libsodium cryptofamily. Upgrade rypt?"),
             };
             Ok(instantiate_crypto_system(aead_algorithm)?)
         }
-        _ => bail!("Unknown crypto_family"),
+        _ => bail!("Unknown cryptofamily. Upgrade rypt?"),
     }
 }
 
@@ -69,11 +71,15 @@ fn recipient_secret_key(
 ) -> Box<AEADKey> {
     match credential {
         Credential::Password(password) => {
+            // Kdf salt is derived from ephemeral public key, to require different key derivation
+            // for every file.
             let mut salt: KdfSalt = Default::default();
             salt.copy_from_slice(&cryptosys.hmac(&*ephemeral_pk, KDF_SALT_NONCE)[..KDF_SALT_LEN]);
             cryptosys.key_derivation(&password, &salt)
         }
         Credential::SymmetricKey(secret_key) => {
+            // Actual key that we use to encrypt/decrypt is derived from secret_key, not uses it
+            // directly, as we want different keys for different files. Luckily, HMAC is pretty fast.
             let mut composed_key = ephemeral_pk.to_vec();
             composed_key.extend(secret_key);
             cryptosys.hmac(&composed_key, SYMMETRIC_SECRET_NONCE)
@@ -82,15 +88,15 @@ fn recipient_secret_key(
     }
 }
 
-fn recipient_secret_nonce(recipient_idx: usize) -> Box<AEADNonce> {
+fn recipient_secret_nonce(recipient_idx: u32) -> Box<AEADNonce> {
     let mut nonce = Box::new(*RECIPIENT_NONCE);
-    nonce[RECIP_IDX_POS..].copy_from_slice(&(recipient_idx as u32).to_le_bytes());
+    nonce[RECIP_IDX_POS..].copy_from_slice(&recipient_idx.to_le_bytes());
     nonce
 }
 
-fn recipient_box_nonce(recipient_idx: usize) -> Box<BoxNonce> {
+fn recipient_box_nonce(recipient_idx: u32) -> Box<BoxNonce> {
     let mut nonce = Box::new(*RECIPIENT_BOX_NONCE);
-    nonce[RECIP_BOX_IDX_POS..].copy_from_slice(&(recipient_idx as u32).to_le_bytes());
+    nonce[RECIP_BOX_IDX_POS..].copy_from_slice(&recipient_idx.to_le_bytes());
     nonce
 }
 
@@ -142,7 +148,7 @@ fn encrypt_composite_key(
     ephemeral_sk: &PrivateKey,
     key: &[u8],
     cred: &ComplexCredential,
-    key_idx: &mut usize,
+    key_idx: &mut u32,
 ) -> Fallible<CompositeKey> {
     let rng = &mut CryptoSystemRng::new(cryptosys);
     let mut key_parts: &[Vec<u8>] =
@@ -169,7 +175,10 @@ fn encrypt_composite_key(
                     ))
                 }
                 Credential::PublicKey(public_key) => {
+                    // To avoid exposing the type of key (public/private vs symmetric/password),
+                    // we require that the corresponding sizes would be the same.
                     const_assert_eq!(AEAD_MAC_LEN, BOX_MAC_LEN);
+
                     let nonce = recipient_box_nonce(*key_idx);
                     *key_idx += 1;
                     KeyData::EncryptedKeyData(cryptosys.box_encrypt_easy(
@@ -182,14 +191,17 @@ fn encrypt_composite_key(
                 Credential::PrivateKey(_) => {
                     panic!("Unexpected private key when encoding");
                 }
-                Credential::Complex(cred) => KeyData::CompositeKey(encrypt_composite_key(
-                    cryptosys,
-                    ephemeral_pk,
-                    ephemeral_sk,
-                    &key_part,
-                    cred,
-                    key_idx,
-                )?),
+                Credential::Complex(cred) => {
+                    let composite_key = encrypt_composite_key(
+                        cryptosys,
+                        ephemeral_pk,
+                        ephemeral_sk,
+                        &key_part,
+                        cred,
+                        key_idx,
+                    )?;
+                    KeyData::CompositeKey(composite_key)
+                }
             };
 
             Ok(EncryptedKeyParts {
@@ -276,18 +288,27 @@ pub fn encrypt_header(
     Ok((serialized_header, codec, chunk_size))
 }
 
+/// Initially we convert credentials to DecryptorFn-s: functions that try to decrypt the encrypted
+/// payload and return either Ok(Some(decrypted_key)) if successful, or Ok(None) if can't decrypt.
+/// This additional level of indirection is needed so that we can do an expensive precomputation
+/// like password KDF once per file, not for every credential. To ensure nonce uniqueness,
+/// DecryptorFn also takes a `key_idx` parameter, which is the sequential index of encrypted key in
+/// the composite key tree.
+type DecryptorFn<'a> = Box<dyn Fn(&[u8], u32) -> Fallible<Option<Vec<u8>>> + 'a>;
+
+/// Convert credentials to decryptor functions.
 fn decryptor_from_credential<'a>(
     cryptosys: &'a dyn CryptoSystem,
     ephemeral_pk: &'a PublicKey,
     credential: &'a Credential,
-) -> Box<dyn Fn(usize, &[u8]) -> Fallible<Option<Vec<u8>>> + 'a> {
+) -> DecryptorFn<'a> {
     match credential {
         Credential::Password(_) | Credential::SymmetricKey(_) => {
             // Compute secret key for each credential only once, as it can be slow to derive it from password.
             let secret_key = recipient_secret_key(&*cryptosys, &ephemeral_pk, credential);
 
             Box::new(
-                move |key_idx: usize, encrypted_key: &[u8]| -> Fallible<Option<Vec<u8>>> {
+                move |encrypted_key: &[u8], key_idx: u32| -> Fallible<Option<Vec<u8>>> {
                     let nonce = recipient_secret_nonce(key_idx);
                     match cryptosys.aead_decrypt_easy(encrypted_key, &secret_key, &nonce) {
                         Ok(res) => Ok(Some(res)),
@@ -301,7 +322,7 @@ fn decryptor_from_credential<'a>(
             panic!("Unexpected public key when decoding");
         }
         Credential::PrivateKey(private_key) => Box::new(
-            move |key_idx: usize, encrypted_key: &[u8]| -> Fallible<Option<Vec<u8>>> {
+            move |encrypted_key: &[u8], key_idx: u32| -> Fallible<Option<Vec<u8>>> {
                 let nonce = recipient_box_nonce(key_idx);
                 match cryptosys.box_decrypt_easy(encrypted_key, ephemeral_pk, private_key, &nonce) {
                     Ok(res) => Ok(Some(res)),
@@ -316,20 +337,21 @@ fn decryptor_from_credential<'a>(
     }
 }
 
+/// Recursively decrypt key parts.
 fn decrypt_key_parts<'a>(
     key_parts: &EncryptedKeyParts,
-    decryptors: &[impl AsRef<dyn Fn(usize, &[u8]) -> Fallible<Option<Vec<u8>>> + 'a>],
-    key_start_idx: &mut usize,
+    decryptors: &[DecryptorFn<'a>],
+    key_start_idx: &mut u32,
     key_part_start_idx: &mut usize,
 ) -> Fallible<Vec<(usize, Vec<u8>)>> {
-    // 1. Try to decrypt key data using credentials (wrapped in decryptors)
+    // 1. Try to decrypt key data blob using credentials (wrapped in decryptors)
     let keydata_opt = match &key_parts.key_data {
-        Some(KeyData::EncryptedKeyData(simple_key)) => {
+        Some(KeyData::EncryptedKeyData(encrypted_key)) => {
             let key_idx = *key_start_idx;
             *key_start_idx += 1;
             decryptors
                 .iter()
-                .find_map(|decryptor| decryptor.as_ref()(key_idx, simple_key).transpose())
+                .find_map(|decryptor| decryptor(encrypted_key, key_idx).transpose())
                 .transpose()?
         }
         Some(KeyData::CompositeKey(composite_key)) => {
@@ -338,7 +360,9 @@ fn decrypt_key_parts<'a>(
         None => bail!("Invalid composite key: no payload"),
     };
 
-    // 2. Split the key data into key parts, as needed.
+    // 2. Split the key data into key parts, if num_key_parts > 1. All parts are of the same size,
+    // so we just split the decoded data into `num_key_parts` equal parts.
+    // Be sure to keep correct key_part_idx calculations so that Shamir threshold scheme can use it.
     let num_key_parts = max(key_parts.num_key_parts as usize, 1);
     let key_part_idx = *key_part_start_idx;
     *key_part_start_idx += num_key_parts;
@@ -362,28 +386,30 @@ fn decrypt_key_parts<'a>(
     })
 }
 
+/// Recursively try to decrypt a composite key using provided decryptor functions.
 fn decrypt_composite_key<'a>(
     composite_key: &CompositeKey,
-    decryptors: &[impl AsRef<dyn Fn(usize, &[u8]) -> Fallible<Option<Vec<u8>>> + 'a>],
-    start_key_idx: &mut usize,
+    decryptors: &[DecryptorFn<'a>],
+    start_key_idx: &mut u32,
 ) -> Fallible<Option<Vec<u8>>> {
     let mut num_key_parts = 0;
 
     // 1. Try to decrypt as many key parts as possible using our credentials (wrapped by decryptors)
-    let mut decrypted_key_parts = vec![];
+    let mut decrypted_key_parts: Vec<(usize, Vec<u8>)> = vec![];
     for key_parts in &composite_key.key_parts {
-        let mut valid_parts =
-            decrypt_key_parts(key_parts, decryptors, start_key_idx, &mut num_key_parts)?;
-        decrypted_key_parts.append(&mut valid_parts);
+        decrypted_key_parts.append(
+            decrypt_key_parts(key_parts, decryptors, start_key_idx, &mut num_key_parts)?.as_mut(),
+        );
     }
 
     // 2. Try to reconstruct resulting key using threshold logic.
-    let threshold = max(composite_key.threshold as usize, 1);
-    if threshold == 1 {
-        // "OR" operator - any of the key parts can be used directly as the key.
-        Ok(decrypted_key_parts.into_iter().next().map(|(_, key)| key))
+    let threshold = composite_key.threshold as usize;
+    if threshold <= 1 {
+        // "OR" operator - any of the key parts can be used directly as the key. We choose the last
+        // one, if it exists, for convenience.
+        Ok(decrypted_key_parts.pop().map(|(_, key)| key))
     } else if threshold == num_key_parts {
-        // "AND" operator - all key parts must be present. To reconstruct the key we use XOR operation.
+        // "AND" operator - all key parts must be present. To reconstruct the key we use XOR.
         if decrypted_key_parts.len() == threshold {
             let mut key = vec![0u8; decrypted_key_parts[0].1.len()];
             for (_, key_part) in decrypted_key_parts {
@@ -407,41 +433,48 @@ pub fn decrypt_header(
     serialized_header: &[u8],
     opts: &DecryptOptions,
 ) -> Fallible<(Box<dyn StreamConverter>, usize)> {
+    // Deserialize header protobuf. We trust `prost` library to do it in a secure fashion.
     let header = RyptFileHeader::decode(serialized_header)
-        .with_context(|e| format!("Invalid header protobuf: {}", e))?;
+        .with_context(|e| format!("Error deserializing header protobuf: {}", e))?;
 
     let cryptosys = cryptosys_from_proto(&header.crypto_family)?;
+
     let ephemeral_pk: PublicKey = header.ephemeral_pk.as_slice().try_into()?;
 
     let payload_key = {
-        let decryptors = opts
+        // Precompute decryptor functions from credentials - some of these are slow (e.g. password
+        // derivation) and we don't want to do it multiple times.
+        let decryptors: Vec<DecryptorFn> = opts
             .credentials
             .iter()
             .map(|cred| decryptor_from_credential(&*cryptosys, &ephemeral_pk, &cred))
-            .collect::<Vec<_>>();
+            .collect();
 
-        let root_key = &header
+        let encrypted_payload_key = &header
             .payload_key
             .ok_or_else(|| err_msg("Invalid header: no payload key"))?;
 
-        decrypt_composite_key(root_key, decryptors.as_slice(), &mut 0)?
+        // Recursively try to decrypt the payload key using all decryptors in turn.
+        decrypt_composite_key(encrypted_payload_key, &decryptors, &mut 0)?
             .ok_or_else(|| err_msg("Invalid or insufficient credentials"))?
     };
 
+    // Main payload key is decrypted, from now on things should be straightforward.
     let payload_key: AEADKey = payload_key.as_slice().try_into()?;
 
+    // Some header data we keep encoded with payload key. Decrypt and deserialize it.
     let protected_header = cryptosys.aead_decrypt_easy(
         &header.protected_header,
         &payload_key,
         ENCRYPTED_HEADER_NONCE,
     )?;
     let protected_header: ProtectedHeader = ProtectedHeader::decode(&protected_header)
-        .with_context(|e| format!("Invalid encrypted header protobuf: {}", e))?;
+        .with_context(|e| format!("Error deserializing encrypted header protobuf: {}", e))?;
 
     let chunk_size = protected_header.plaintext_chunk_size as usize;
     check_chunk_size(chunk_size)?;
 
-    // Check sender_auth_type, even though we only support anonymous.
+    // Check sender_auth_type, even though we currently only support anonymous.
     match SenderAuthType::from_i32(protected_header.sender_auth_type) {
         Some(SenderAuthType::Anonymous) => {
             ensure!(
@@ -450,10 +483,11 @@ pub fn decrypt_header(
             );
         }
         _ => {
-            bail!("Unknown sender authentication type");
+            bail!("Unknown sender authentication type. Upgrade rypt?");
         }
     }
 
+    // Finally, precompute header hash and create streaming decoder using payload key.
     let header_hash = cryptosys.hash(&serialized_header);
     let codec = Box::new(CryptoSystemAEADCodec::new(
         cryptosys,

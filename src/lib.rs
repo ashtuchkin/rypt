@@ -7,7 +7,7 @@ pub mod commands;
 mod credentials;
 mod crypto;
 pub mod errors;
-mod header;
+mod header_crypto;
 mod header_io;
 mod io_streams;
 mod progress;

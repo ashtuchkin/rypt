@@ -2,7 +2,7 @@ use failure::Fallible;
 
 use crate::commands::{CryptDirectionOpts, CryptOptions, InputCleanupPolicy};
 use crate::errors::CompositeError;
-use crate::header::{decrypt_header, encrypt_header};
+use crate::header_crypto::{decrypt_header, encrypt_header};
 use crate::header_io::{read_header, write_header};
 use crate::io_streams::InputOutputStream;
 use crate::progress::ProgressPrinter;
@@ -35,6 +35,7 @@ pub fn crypt_streams(
 
             let output = output?;
 
+            // 1. Open input and output streams
             let (mut input_stream, input_filesize, cleanup_cb_opt) =
                 input.open_with_cleanup_cb()?;
             input_cleanup_cb_opt = cleanup_cb_opt;
@@ -43,6 +44,7 @@ pub fn crypt_streams(
             let (mut output_stream, cleanup_cb_opt) = output.open_with_cleanup_cb()?;
             output_cleanup_cb_opt = cleanup_cb_opt;
 
+            // 2. Read/write file header and prepare stream converter.
             let (stream_converter, chunk_size) = match direction {
                 CryptDirectionOpts::Encrypt(opts) => {
                     let (file_header, stream_converter, chunk_size) = encrypt_header(&opts)?;
@@ -50,12 +52,13 @@ pub fn crypt_streams(
                     (stream_converter, chunk_size)
                 }
                 CryptDirectionOpts::Decrypt(opts) => {
-                    let (file_header, read_header_bytes) = read_header(&mut input_stream)?;
-                    progress_printer.print_progress(read_header_bytes);
+                    let (file_header, num_bytes_read) = read_header(&mut input_stream)?;
+                    progress_printer.print_progress(num_bytes_read);
                     decrypt_header(&file_header, &opts)?
                 }
             };
 
+            // 3. Convert the file data
             stream_pipeline::convert_stream(
                 stream_converter,
                 input_stream,

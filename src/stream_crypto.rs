@@ -8,7 +8,7 @@ use crate::crypto::{
 };
 use crate::stream_pipeline::{Chunk, ChunkConfig, StreamConverter};
 
-const CHUNK_NONCE: &AEADNonce = b"rych\0\0\0\0\0\0\0\0"; // Zeros will be replaced with chunk_idx
+const CHUNK_NONCE: &AEADNonce = b"rych########"; // ######## will be replaced with 64-bit chunk_idx
 const CHUNK_IDX_POS: usize = AEAD_NONCE_LEN - std::mem::size_of::<u64>(); // Put chunk index in the last 8 bytes.
 
 pub struct CryptoSystemAEADCodec {
