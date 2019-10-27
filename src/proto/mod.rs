@@ -1,1 +1,3 @@
-pub mod rypt;
+pub mod rypt {
+    include!(concat!(env!("OUT_DIR"), "/rypt.rs"));
+}

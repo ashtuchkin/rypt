@@ -82,6 +82,7 @@ fn hardlinks_not_allowed() -> Fallible<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn overwrite_existing_files_not_allowed() -> Fallible<()> {
     let rng = &mut thread_rng();
