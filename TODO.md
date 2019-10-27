@@ -1,17 +1,8 @@
 # P0
- * Input/output file management:
-    *   copy attributes from the replaced file (owner, group, perms, access/mod times)
-    * Warning and skip if: symlink, non-file, multiple hardlinks
-  * '-f' flag - overwrite the destination file; skip extension checks; ignore the fact that they are symlinks/hardlinks, 
-      read/write encrypted data to terminal, 
-      Convert all these errors to warnings.
  * Tests
     * Review the code and cover most sensitive areas.
     * header.rs
     * Test password handling
-    * If target file already exists, error and skip.
-    * delete the output file on error or if interrupted (ctrl-c)
-    * warning and skip if already has extension, doesn't have supported ext
     * '-k, --keep' - keep the original file
     * '-c, --stdout, --to-stdout' - write to stdout; implies -k
  * Cleanup README, INTERNALS, TODO, header.proto, header.rs to prepare for publishing
@@ -37,6 +28,7 @@
  * Progress should be shown for the whole operation (estimate total size) - requires InputStream creators to read 
    metadata (which might be a good thing anyway)
  * Sender signature and repudiable verification
+ * Copy attributes from the replaced file (owner, group, perms, access/mod times)
  * Harden against information leaks:
    * Avoid leaking information about file length by adding random padding, likely in the beginning. ~1 kb to 1 mb or 3%
    * Pad encrypted header to 1kb?

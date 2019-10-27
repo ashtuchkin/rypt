@@ -11,12 +11,13 @@ use crate::{ReaderFactory, WriterFactory};
 pub(super) fn get_input_output_streams(
     matches: &Matches,
     crypt_direction: CryptDirection,
+    force: bool,
     open_stdin: ReaderFactory,
     open_stdout: WriterFactory,
 ) -> Fallible<Vec<InputOutputStream>> {
     let stream_mode = matches.opt_present("s") || matches.free.is_empty() || matches.free == ["-"];
 
-    Ok(if stream_mode {
+    if stream_mode {
         ensure!(
             matches.free.len() <= 1,
             "Streaming mode only supports a single input"
@@ -31,8 +32,9 @@ pub(super) fn get_input_output_streams(
 
         let output = Ok(OutputStream::Stdout { open_stdout });
 
-        vec![InputOutputStream { input, output }]
+        Ok(vec![InputOutputStream { input, output }])
     } else {
+        // Regular "file" mode.
         if matches.free.iter().any(|s| s.trim() == "-") {
             bail!("Stdin/stdout designator '-' can only be specified once and no other files can be processed at the same time.");
         }
@@ -45,8 +47,8 @@ pub(super) fn get_input_output_streams(
             .map(|input_path| {
                 let input_path = PathBuf::from(input_path);
                 let output_path = match crypt_direction {
-                    CryptDirection::Encrypt => add_extension(&input_path, &extension),
-                    CryptDirection::Decrypt => remove_extension(&input_path, &extension),
+                    CryptDirection::Encrypt => add_extension(&input_path, &extension, force),
+                    CryptDirection::Decrypt => remove_extension(&input_path, &extension, force),
                 };
                 InputOutputStream {
                     input: InputStream::File { path: input_path },
@@ -61,8 +63,8 @@ pub(super) fn get_input_output_streams(
         //            return Err(io_stream.output.unwrap_err());
         //        }
 
-        io_streams
-    })
+        Ok(io_streams)
+    }
 }
 
 // Figure out the encrypted file extension, ensuring it doesn't start with a '.'
@@ -76,11 +78,11 @@ fn get_encrypted_file_extension(matches: &Matches) -> OsString {
     OsString::from(extension)
 }
 
-fn add_extension(input_path: &Path, extension: &OsStr) -> Fallible<PathBuf> {
+fn add_extension(input_path: &Path, extension: &OsStr, force: bool) -> Fallible<PathBuf> {
     let mut new_ext = input_path.extension().unwrap_or_default().to_os_string();
     ensure!(
-        new_ext != extension,
-        "{}: Unexpected file extension, skipping. Did you mean to decrypt (-d) this file?",
+        force || new_ext != extension,
+        "{}: File already has encrypted extension, skipping. Did you mean to decrypt (-d) this file? Use streaming mode (-s) or force (-f) to override.",
         input_path.to_string_lossy()
     );
     if !new_ext.is_empty() {
@@ -90,10 +92,11 @@ fn add_extension(input_path: &Path, extension: &OsStr) -> Fallible<PathBuf> {
     Ok(input_path.with_extension(new_ext))
 }
 
-fn remove_extension(input_path: &Path, extension: &OsStr) -> Fallible<PathBuf> {
+fn remove_extension(input_path: &Path, extension: &OsStr, _force: bool) -> Fallible<PathBuf> {
+    // We can't really force this check because it's not clear how to adjust the file name.
     ensure!(
         input_path.extension() == Some(&extension),
-        "{}: Unexpected file extension, skipping.",
+        "{}: File doesn't have an encrypted extension, skipping. Did you mean to encrypt (-e) this file? Use streaming mode (-s) to override.",
         input_path.to_string_lossy()
     );
     Ok(input_path.with_extension(""))

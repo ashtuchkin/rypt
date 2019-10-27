@@ -37,11 +37,11 @@ pub fn crypt_streams(
 
             // 1. Open input and output streams
             let (mut input_stream, input_filesize, cleanup_cb_opt) =
-                input.open_with_cleanup_cb()?;
+                input.open_with_cleanup_cb(opts.force)?;
             input_cleanup_cb_opt = cleanup_cb_opt;
             progress_printer.set_filesize(input_filesize);
 
-            let (mut output_stream, cleanup_cb_opt) = output.open_with_cleanup_cb()?;
+            let (mut output_stream, cleanup_cb_opt) = output.open_with_cleanup_cb(opts.force)?;
             output_cleanup_cb_opt = cleanup_cb_opt;
 
             // 2. Read/write file header and prepare stream converter.

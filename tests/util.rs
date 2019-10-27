@@ -5,7 +5,7 @@ use rand::{Rng, RngCore};
 pub use rypt::util::to_hex_string;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
@@ -33,6 +33,13 @@ pub fn create_temp_file(rng: &mut dyn RngCore, extension: &str) -> Fallible<(Pat
     let contents = random_bytes(rng, 10_000_000);
     fs::write(&temp_file, &contents)?;
     Ok((temp_file, contents))
+}
+
+pub fn create_temp_file_secret(rng: &mut dyn RngCore) -> Fallible<PathBuf> {
+    let temp_file = temp_filename(rng, ".secret");
+    let contents = to_hex_string(random_bytes(rng, 32));
+    fs::write(&temp_file, &contents)?;
+    Ok(temp_file)
 }
 
 pub fn main_binary_path() -> Fallible<PathBuf> {
@@ -111,4 +118,16 @@ impl CommandExt for Command {
         }
         cmd
     }
+}
+
+#[cfg(unix)]
+pub fn symlink(src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Fallible<()> {
+    std::os::unix::fs::symlink(src, dest)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn symlink(src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Fallible<()> {
+    std::os::windows::fs::symlink_file(src, dest)?;
+    Ok(())
 }

@@ -1,18 +1,19 @@
 use failure::{Fallible, ResultExt};
 use std::io::Write;
 
-use crate::commands::KeyPairOutputStreams;
+use crate::commands::{GenerateKeyPairOptions, KeyPairOutputStreams};
 use crate::crypto::{PRIVATE_KEY_LEN, PUBLIC_KEY_LEN};
 use crate::errors::CompositeError;
 use crate::ui::UI;
 use crate::{crypto, util};
 
-pub fn generate_key_pair_files(streams: Vec<KeyPairOutputStreams>, ui: &dyn UI) -> Fallible<()> {
+pub fn generate_key_pair_files(opts: GenerateKeyPairOptions, ui: &dyn UI) -> Fallible<()> {
     let cryptosys = crypto::instantiate_crypto_system(Default::default())?;
-    let total_num = streams.len();
+    let total_num = opts.streams.len();
+    let force = opts.force;
     let mut errors = vec![];
 
-    for (file_idx, streams) in streams.into_iter().enumerate() {
+    for (file_idx, streams) in opts.streams.into_iter().enumerate() {
         let KeyPairOutputStreams {
             public_key_stream,
             private_key_stream,
@@ -53,7 +54,7 @@ pub fn generate_key_pair_files(streams: Vec<KeyPairOutputStreams>, ui: &dyn UI) 
             if let Some(public_key_stream) = public_key_stream {
                 ui.println(0, &format!("    Public key file: {}", public_key_path))?;
                 public_key_stream
-                    .open()?
+                    .open(force)?
                     .write_all(public_key.as_bytes())
                     .with_context(|e| format!("Error writing to '{}': {}", public_key_path, e))?;
             }
@@ -61,7 +62,7 @@ pub fn generate_key_pair_files(streams: Vec<KeyPairOutputStreams>, ui: &dyn UI) 
             // Write the private key
             ui.println(0, &format!("    Private key file: {}", private_key_path))?;
             private_key_stream
-                .open()?
+                .open(force)?
                 .write_all(private_key.as_bytes())
                 .with_context(|e| format!("Error writing to '{}': {}", private_key_path, e))?;
             Ok(())

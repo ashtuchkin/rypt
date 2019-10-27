@@ -46,6 +46,9 @@ pub enum InputCleanupPolicy {
 pub struct CryptOptions {
     // Whether we keep or delete input files after successful encryption/decryption.
     pub input_cleanup_policy: InputCleanupPolicy,
+
+    // '-f' flag is given, so we should relax our checks.
+    pub force: bool,
 }
 
 #[derive(Debug)]
@@ -57,6 +60,7 @@ pub struct KeyPairOutputStreams {
 #[derive(Debug)]
 pub struct GenerateKeyPairOptions {
     pub streams: Vec<KeyPairOutputStreams>,
+    pub force: bool,
 }
 
 pub fn run_command(command: Command, ui: &dyn UI) -> Fallible<()> {
@@ -64,7 +68,7 @@ pub fn run_command(command: Command, ui: &dyn UI) -> Fallible<()> {
         Command::CryptStreams(streams, opts, direction) => {
             crypt_streams(streams, &opts, &direction, ui)
         }
-        Command::GenerateKeyPair(opts) => generate_key_pair_files(opts.streams, ui),
+        Command::GenerateKeyPair(opts) => generate_key_pair_files(opts, ui),
         Command::Help(output) => print_help(output, ui.program_name()),
         Command::Version(output) => print_version(output),
     }

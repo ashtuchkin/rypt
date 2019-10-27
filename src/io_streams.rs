@@ -1,5 +1,5 @@
-use failure::{Fallible, ResultExt};
-use std::fs::{self, OpenOptions};
+use failure::{ensure, Fallible, ResultExt};
+use std::fs::{self, Metadata, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use crate::{Reader, ReaderFactory, Writer, WriterFactory};
@@ -23,47 +23,73 @@ impl InputStream {
 
     // Open the file/stream and return corresponding Reader stream, plus file size if available.
     // Note, this consumes the InputStream due to Reader in Stdin variant not being cloneable.
-    pub fn open(self) -> Fallible<(Reader, Option<usize>)> {
+    pub fn open(self, force: bool) -> Fallible<(Reader, Option<usize>)> {
+        fn open_file(path: &Path) -> Fallible<(Reader, Metadata)> {
+            let file = OpenOptions::new()
+                .read(true)
+                .open(&path)
+                .with_context(|e| format!("Error opening '{}': {}", path.to_string_lossy(), e))?;
+
+            let metadata = fs::symlink_metadata(path)?;
+            ensure!(!metadata.is_dir(), "Can't encrypt/decrypt a directory.");
+
+            Ok((Box::new(file), metadata))
+        }
+
         match self {
-            InputStream::File { path, .. } | InputStream::FileStream { path } => {
-                let file = OpenOptions::new()
-                    .read(true)
-                    .open(&path)
-                    .with_context(|e| {
-                        format!("Error opening '{}': {}", path.to_string_lossy(), e)
-                    })?;
+            InputStream::File { path } => {
+                let (stream, metadata) = open_file(&path)?;
+
+                // Check we have a real file, not a symlink or a hardlink.
+                if !force {
+                    let file_type = metadata.file_type();
+                    ensure!(!file_type.is_symlink(), "Can't encrypt/decrypt a symlink. Use streaming mode (-s) or force (-f) to override.");
+                    if cfg!(unix) {
+                        use std::os::unix::fs::MetadataExt;
+                        ensure!(metadata.nlink() == 1, "Can't encrypt/decrypt a file with hard links. Use streaming mode (-s) or force (-f) to override.");
+                    }
+                    ensure!(file_type.is_file(), "Can't encrypt/decrypt non-regular file. Use streaming mode (-s) or force (-f) to override.");
+                }
+
+                Ok((stream, Some(metadata.len() as usize)))
+            }
+            InputStream::FileStream { path } => {
+                let (stream, metadata) = open_file(&path)?;
 
                 // NOTE: File-like streams report their file size as 0; we return None instead.
-                let metadata = file.metadata()?;
-                let filesize = if metadata.is_file() {
-                    Some(metadata.len() as usize)
-                } else {
-                    None
-                };
-                Ok((Box::new(file), filesize))
+                let filesize = Some(metadata.len() as usize).filter(|&len| len > 0);
+                Ok((stream, filesize))
             }
-            InputStream::Stdin { open_stdin } => Ok((open_stdin()?, None)),
+            InputStream::Stdin { open_stdin } => {
+                let stream = open_stdin()?;
+                Ok((stream, None))
+            }
         }
     }
 
     pub fn open_with_cleanup_cb(
         self,
+        force: bool,
     ) -> Fallible<(Reader, Option<usize>, Option<impl FnOnce() -> Fallible<()>>)> {
         let cleanup_cb_opt = match &self {
             InputStream::File { path, .. } => {
                 let path = path.clone();
                 Some(move || {
-                    fs::remove_file(&path)
-                        .with_context(|err| {
-                            format!("Error deleting '{}': {}", path.to_string_lossy(), err)
-                        })
-                        .map_err(|err| err.into())
+                    let res = fs::remove_file(&path).with_context(|err| {
+                        format!("Error deleting '{}': {}", path.to_string_lossy(), err)
+                    });
+
+                    // Ignore error if forced.
+                    if !force {
+                        res?
+                    }
+                    Ok(())
                 })
             }
             InputStream::Stdin { .. } | InputStream::FileStream { .. } => None,
         };
 
-        let (reader, filesize) = self.open()?;
+        let (reader, filesize) = self.open(force)?;
         Ok((reader, filesize, cleanup_cb_opt))
     }
 }
@@ -97,36 +123,52 @@ impl OutputStream {
         }
     }
 
-    pub fn open(self) -> Fallible<Writer> {
+    pub fn open(self, force: bool) -> Fallible<Writer> {
         match self {
             OutputStream::File { path } => {
-                let file = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)  // Make sure we don't overwrite existing files
-                    .open(&path)
-                    .with_context(|e| format!("Error creating '{}': {}", path.to_string_lossy(), e))?;
+                let mut open_opts = OpenOptions::new();
+                open_opts.write(true);
+
+                if !force {
+                    // Make sure we don't overwrite existing files
+                    open_opts.create_new(true);
+                } else {
+                    open_opts.truncate(true);
+                    open_opts.create(true);
+                }
+
+                let file = open_opts.open(&path).with_context(|e| {
+                    format!("Error creating '{}': {}", path.to_string_lossy(), e)
+                })?;
+
                 Ok(Box::new(file))
             }
             OutputStream::Stdout { open_stdout } => open_stdout(),
         }
     }
 
-    pub fn open_with_cleanup_cb(self) -> Fallible<(Writer, Option<impl FnOnce() -> Fallible<()>>)> {
+    pub fn open_with_cleanup_cb(
+        self,
+        force: bool,
+    ) -> Fallible<(Writer, Option<impl FnOnce() -> Fallible<()>>)> {
         let cleanup_cb_opt = match &self {
             OutputStream::File { path } => {
                 let path = path.clone();
                 Some(move || {
-                    fs::remove_file(&path)
-                        .with_context(|err| {
-                            format!("Error deleting '{}': {}", path.to_string_lossy(), err)
-                        })
-                        .map_err(|err| err.into())
+                    let res = fs::remove_file(&path).with_context(|err| {
+                        format!("Error deleting '{}': {}", path.to_string_lossy(), err)
+                    });
+                    // Ignore error if forced.
+                    if !force {
+                        res?
+                    }
+                    Ok(())
                 })
             }
             OutputStream::Stdout { .. } => None,
         };
 
-        Ok((self.open()?, cleanup_cb_opt))
+        Ok((self.open(force)?, cleanup_cb_opt))
     }
 }
 

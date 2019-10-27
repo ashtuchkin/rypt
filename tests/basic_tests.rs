@@ -44,17 +44,15 @@ fn simple_file_encrypt_decrypt(
         format!("{}.{}", extension, DEFAULT_FILE_SUFFIX)
     };
     let temp_file_path_enc = temp_file_path.with_extension(ext);
-    let secret_key = util::to_hex_string(util::random_bytes(rng, 32));
+    let secret_key_file_path = util::create_temp_file_secret(rng)?;
+
     dbg!(&temp_file_path);
     dbg!(&temp_file_path_enc);
-    dbg!(&secret_key);
-    let mut secret_key_file = tempfile::NamedTempFile::new()?;
-    secret_key_file.write_all(secret_key.as_bytes())?;
-    let secret_key_file_path = secret_key_file.path().to_str().unwrap();
+    dbg!(&secret_key_file_path);
 
     let args = &[
         "--symmetric-key",
-        secret_key_file_path,
+        secret_key_file_path.to_str().unwrap(),
         "--discard-inputs",
         temp_file_path.to_str().unwrap(),
     ];
@@ -69,7 +67,7 @@ fn simple_file_encrypt_decrypt(
     let output = util::main_cmd(&[
         "-d",
         "--symmetric-key",
-        secret_key_file_path,
+        secret_key_file_path.to_str().unwrap(),
         "--discard-inputs",
         temp_file_path_enc.to_str().unwrap(),
     ])?

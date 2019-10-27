@@ -87,14 +87,20 @@ pub fn parse_command_line(
 
     Ok(match mode {
         OperationMode::Crypt(crypt_direction) => {
-            let streams =
-                get_input_output_streams(&matches, crypt_direction, open_stdin, open_stdout)?;
+            let streams = get_input_output_streams(
+                &matches,
+                crypt_direction,
+                force,
+                open_stdin,
+                open_stdout,
+            )?;
 
             check_and_adjust_ui_verbosity(
                 ui,
                 verbosity,
                 &streams,
                 crypt_direction,
+                force,
                 stdin_is_tty,
                 stdout_is_tty,
                 stderr_is_tty,
@@ -114,6 +120,7 @@ pub fn parse_command_line(
                 streams,
                 CryptOptions {
                     input_cleanup_policy,
+                    force,
                 },
                 match crypt_direction {
                     CryptDirection::Encrypt => CryptDirectionOpts::Encrypt(EncryptOptions {
@@ -128,7 +135,7 @@ pub fn parse_command_line(
         }
         OperationMode::GenerateKeypair => {
             let streams = get_keypair_streams(&matches, open_stdout)?;
-            Command::GenerateKeyPair(GenerateKeyPairOptions { streams })
+            Command::GenerateKeyPair(GenerateKeyPairOptions { streams, force })
         }
         OperationMode::Help => Command::Help(OutputStream::Stdout { open_stdout }),
         OperationMode::Version => Command::Version(OutputStream::Stdout { open_stdout }),
@@ -145,11 +152,13 @@ pub fn parse_command_line(
 // 3. Show progress if output is verbose (item 2 above) and progress messages won't mess up with
 //    TTY stdin/stdout. We do want to support e.g. encryption of messages that user types directly
 //    (stdin is TTY), and progress messages would get in the way.
+#[allow(clippy::too_many_arguments)]
 fn check_and_adjust_ui_verbosity(
     ui: &mut dyn UI,
     verbosity: i32,
     streams: &[InputOutputStream],
     crypt_direction: CryptDirection,
+    force: bool,
     stdin_is_tty: bool,
     stdout_is_tty: bool,
     stderr_is_tty: bool,
@@ -170,11 +179,11 @@ fn check_and_adjust_ui_verbosity(
         }
     }
 
-    if stdin_is_tty && stdin_is_binary {
+    if stdin_is_tty && stdin_is_binary && !force {
         bail!("Encrypted data cannot be read from a terminal.");
     }
-    if stdout_is_tty && stdout_is_binary {
-        bail!("Encrypted data cannot be written to a terminal");
+    if stdout_is_tty && stdout_is_binary && !force {
+        bail!("Encrypted data cannot be written to a terminal.");
     }
 
     if verbosity == 0 {

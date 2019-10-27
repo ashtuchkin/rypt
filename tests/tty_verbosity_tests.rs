@@ -166,7 +166,7 @@ fn pipe_tty_encoding_decoding() -> Fallible<()> {
 
     // Basic decoding from pipe to TTY
     let mut password_file = tempfile::NamedTempFile::new()?;
-    write!(password_file, "{}\n", password)?;
+    writeln!(password_file, "{}", password)?;
     let password_file_path = password_file.path().to_str().unwrap();
 
     let output = util::main_cmd(&["-d", "--password-file", password_file_path])?

@@ -15,7 +15,7 @@ fn opt_usage(define_options: impl Fn(&mut Options)) -> String {
 }
 
 pub fn print_help(output: OutputStream, program_name: &str) -> Fallible<()> {
-    let mut stdout = output.open()?;
+    let mut stdout = output.open(false)?;
     writeln!(
         stdout,
         "\
@@ -51,7 +51,7 @@ Home page and documentation: <https://github.com/ashtuchkin/rypt>",
 }
 
 pub fn print_version(output: OutputStream) -> Fallible<()> {
-    let mut stdout = output.open()?;
+    let mut stdout = output.open(false)?;
     writeln!(stdout, "{} {}", PKG_NAME, PKG_VERSION)?;
     writeln!(stdout, "libsodium {}", LibSodiumCryptoSystem::version())?;
     Ok(())
