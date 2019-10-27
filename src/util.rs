@@ -1,5 +1,6 @@
 use failure::{Fail, Fallible};
 use prost::Message;
+use std::fs::Metadata;
 use std::time::Duration;
 
 static SCALES: &[&str; 7] = &["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
@@ -124,6 +125,18 @@ pub fn serialize_proto<T: Message>(message: &T) -> Fallible<Vec<u8>> {
 pub fn xor_vec(a: &mut [u8], b: &[u8]) {
     assert_eq!(a.len(), b.len());
     a.iter_mut().zip(b).for_each(|(a, b)| *a ^= *b);
+}
+
+#[cfg(unix)]
+pub fn num_hardlinks(metadata: &Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.nlink()
+}
+
+#[cfg(windows)]
+pub fn num_hardlinks(_metadata: &Metadata) -> u64 {
+    // Hard links not supported on Windows (not stable).
+    1
 }
 
 #[cfg(test)]

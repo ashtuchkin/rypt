@@ -2,6 +2,7 @@ use failure::{ensure, Fallible, ResultExt};
 use std::fs::{self, Metadata, OpenOptions};
 use std::path::{Path, PathBuf};
 
+use crate::util;
 use crate::{Reader, ReaderFactory, Writer, WriterFactory};
 
 pub enum InputStream {
@@ -44,10 +45,7 @@ impl InputStream {
                 if !force {
                     let file_type = metadata.file_type();
                     ensure!(!file_type.is_symlink(), "Can't encrypt/decrypt a symlink. Use streaming mode (-s) or force (-f) to override.");
-                    if cfg!(unix) {
-                        use std::os::unix::fs::MetadataExt;
-                        ensure!(metadata.nlink() == 1, "Can't encrypt/decrypt a file with hard links. Use streaming mode (-s) or force (-f) to override.");
-                    }
+                    ensure!(util::num_hardlinks(&metadata) == 1, "Can't encrypt/decrypt a file with hard links. Use streaming mode (-s) or force (-f) to override.");
                     ensure!(file_type.is_file(), "Can't encrypt/decrypt non-regular file. Use streaming mode (-s) or force (-f) to override.");
                 }
 
