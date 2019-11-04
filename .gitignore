@@ -1,4 +1,5 @@
 /target
+/deployment
 **/*.rs.bk
 .idea
 rypt

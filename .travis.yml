@@ -1,63 +1,62 @@
+
 dist: bionic
 language: rust
-rust:
-  - stable
-
-git:
-  quiet: true
 
 env:
   global:
-    - CRATE_NAME=rypt
-    - BIN_NAME=rypt
+    - PROJECT_NAME=rypt
 
 addons:
   apt:
     packages:
-    - musl-tools
+      - musl-tools
 
 matrix:
   fast_finish: true
   include:
-    # Linux
-#    - env: TARGET=i686-unknown-linux-gnu
-#    - env: TARGET=i686-unknown-linux-musl
-#    - env: TARGET=x86_64-unknown-linux-gnu
-    - env: TARGET=x86_64-unknown-linux-musl
+    # Linux. We only build static MUSL target because it's more portable.
+    #- env: TARGET=i686-unknown-linux-musl FRIENDLY_TARGET_NAME=linux-i686
+    - env: TARGET=x86_64-unknown-linux-musl FRIENDLY_TARGET_NAME=linux-x86_64
 
-#    # OSX
-    - env: TARGET=x86_64-apple-darwin
+    # OSX.
+    - env: TARGET=x86_64-apple-darwin FRIENDLY_TARGET_NAME=osx-x86_64
       os: osx
-#
-#    # Windows
+
+    # Windows is not ready yet. We use AppVeyor.
 #    - env: TARGET=x86_64-pc-windows-gnu
+#      os: windows
 
 before_install:
   - rustup target add $TARGET
 
+# NOTE: Cargo can use $CARGO_BUILD_TARGET env variable instead of `--target` cmdline arg, but it's better to be explicit.
 install:
   - cargo build --release --bins --tests --target $TARGET
 
 script:
   - cargo test --release --target $TARGET
 
-#after_script: set +e
-
-before_deploy:
-  - strip target/$TARGET/release/$BIN_NAME
-  - cp target/$TARGET/release/$BIN_NAME $CRATE_NAME-$TRAVIS_TAG-$TARGET
-#  - sh ci/before_deploy.sh
+before_deploy: ./ci/before_deploy.sh
 
 deploy:
-  provider: releases
-  edge: true  # Optin to v2
-  token:
-    secure: "ZnbuFXVEqc+VbcYYjyCLsRxBL2P6jUJSBqQ7S19fZfa7Od8pIxz/gJ9bQPWMVqeYtsgP/PD3VaqsUiMGIn+J174yMonQI3fR/XR6UpbGSs7YaFg2Fa7yfGt5NDgMhi0eZt+EqWA0yoin0JKO0BPMpsN2ik45zdy4rw/ATa+XES3PDS455nCR1K6pD/7FOP7h+H3hmVKFx+8fY6Ojy8lhYRDpnt9/91wb0pDlg5nnEJHVH1/TSvmiTUXFcq9SPehcKCkiQyC0+drY44Ex58/QG9uRf6vOxIsirJKqgnfAe8zjBCz2vZbO04DcygfJYku4tQj+MD2h12kDrQppn6TkRk768U5ktF31I30OU7/PW83dJ1hrE64MICB+yHf+w9gEzmKV4vdAAXaghjdTojIWd1dzNGmWY8K8RDhyJsuO9NO7NkGqA9vfAYODk0Oz9U0wTVBdcd1n/zSf5EjSM4Gg9YgIliTfcQiA3j8L332DZi7J6dC46RJHuZjQfemDrnBkF4vcAXYEVouzIhQHzVX/VE+CgIe/ayXMSOYcUju/1rhb2ktKoqV49pOaEZ3SGA76pkhHAGy4gnm2sadQDSp0SocQ4PTY4vLim7nXrQiuLMb722waz7KaBCSw1/MegDmXQ9sF1iZP2g1b7kUVwES+3Xjg/oer7jU2pDHLJyP8IHQ="
-  draft: true
-  file: $CRATE_NAME-$TRAVIS_TAG-$TARGET
-  on:
-    tags: true
-  skip_cleanup: true
+  # GitHub Releases
+  - provider: releases
+    api_key:
+      secure: "ZnbuFXVEqc+VbcYYjyCLsRxBL2P6jUJSBqQ7S19fZfa7Od8pIxz/gJ9bQPWMVqeYtsgP/PD3VaqsUiMGIn+J174yMonQI3fR/XR6UpbGSs7YaFg2Fa7yfGt5NDgMhi0eZt+EqWA0yoin0JKO0BPMpsN2ik45zdy4rw/ATa+XES3PDS455nCR1K6pD/7FOP7h+H3hmVKFx+8fY6Ojy8lhYRDpnt9/91wb0pDlg5nnEJHVH1/TSvmiTUXFcq9SPehcKCkiQyC0+drY44Ex58/QG9uRf6vOxIsirJKqgnfAe8zjBCz2vZbO04DcygfJYku4tQj+MD2h12kDrQppn6TkRk768U5ktF31I30OU7/PW83dJ1hrE64MICB+yHf+w9gEzmKV4vdAAXaghjdTojIWd1dzNGmWY8K8RDhyJsuO9NO7NkGqA9vfAYODk0Oz9U0wTVBdcd1n/zSf5EjSM4Gg9YgIliTfcQiA3j8L332DZi7J6dC46RJHuZjQfemDrnBkF4vcAXYEVouzIhQHzVX/VE+CgIe/ayXMSOYcUju/1rhb2ktKoqV49pOaEZ3SGA76pkhHAGy4gnm2sadQDSp0SocQ4PTY4vLim7nXrQiuLMb722waz7KaBCSw1/MegDmXQ9sF1iZP2g1b7kUVwES+3Xjg/oer7jU2pDHLJyP8IHQ="
+    file: deployment/*
+    file_glob: true
+    skip_cleanup: true
+    on:
+      tags: true
+
+  # Cargo
+  - provider: cargo
+    token:
+      secure: "KGy+xBFpFjB0JV3b+cTHHHVq4D5RxOjGIbKSGDPhYay16W2tHiQ7lFMe8LtSvoI3oaMSmLFTeKIb/q+JZ9f7gPcNd7ZiWHeS5tv+qAw8VzTuW8CfFsPNOSdM9TnNJKcuIjRAEzVXvdG/1Kg7cUJ4eONt+Ihr/r4wH89vhdn+uxXB8a4d7N0fFqshas2PWO79rCzh3LKdfQZiVJTFWe8zx7UIG32GhS4U6pgDDuZmXolYJl1R/CvIzaLk9MB6njRbVxUmGEqjfYTywTnGg4fQLbBi1r1X7plpOFvSQ8wciA7dOgREMMPnMZ1fS55tyC4WsmGhR+tblJ7Ty/sndxAfDatiqtZctejubdqESsDe3PvzC1q2CWlKEMfkV2jpC4jBYoGSCFsjOAWQNpmrRFodAvNIaAyzFtkS0VkPChed81jWBwvJki3tZpBbDrxJip0W63cfsGo7B9iQaLOChE/a3ImJ9MUIaThHoPjYzQMPNW3HLy2AWHsawWNsarv+/UFTux9ameaeiOQEZ2LF8nbX/ctvqbgCYKysPuayRKlplMC7UQwoDiiqGsx9s/hfu2gD35xJSKe/cxtxreYdXYxIl1kfK2yhB6xoXCTgNIaO1bArESA2Vf1qIIcKvYaKv571Y1gY54gM1ITlSB4xN66QwEhX1SmjK7+isSm7cK5IoPQ="
+    skip_cleanup: true
+    on:
+      tags: true
+      condition: $TARGET = x86_64-unknown-linux-musl  # For Cargo, we only need to upload the package once
 
 cache: cargo
 
