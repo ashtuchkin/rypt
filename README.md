@@ -9,7 +9,7 @@
  * Supports advanced use cases like multiple passwords/public keys, [key threshold schemes](https://en.wikipedia.org/wiki/Secret_sharing) and more.
  * Fast. ~1.1 Gb/s on a 2013 MacBook using AES256-GCM algorithm. Usually I/O bandwidth is the limiting factor.
  * Easy to use at both beginner and advanced level (see examples below).
- * Lightweight: ~1 Mb binary size; <10 Mb memory used (except as required by password derivation functions).
+ * Lightweight, single-binary distribution: ~1 Mb binary size; <10 Mb memory used (except as required by password derivation functions).
  * Operating System Support: x86 Linux, MacOS, Windows.
  * Open source, MIT license.
 

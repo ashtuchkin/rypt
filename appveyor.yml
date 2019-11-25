@@ -41,8 +41,11 @@ before_deploy:
   - cargo rustc --target %TARGET% --release --bins -- -C lto
   - ps: ci\before_deploy.ps1
 
+artifacts:
+  - path: deployment\**\*.*
+
 deploy:
-  - artifact: /.*\.zip/
+  - artifact: /.*/
     auth_token:
       secure: qWDXszRXbGzhtHi9+Z4fRzRWpSW+XsK6IWXXPgTmgfSPSNRvEvPv+hHG57btbqMc
     description: ''

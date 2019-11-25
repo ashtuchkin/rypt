@@ -1,24 +1,19 @@
 # This script takes care of packaging the build artifacts that will go in the
 # release zipfile
 
-$SRC_DIR = $PWD.Path
-New-Item -Type Directory -Name deployment
+# Create target folder to put files in.
+$TARGET_DIR = ".\deployment\$($Env:FRIENDLY_TARGET_NAME)"
+New-Item -Type Directory -Path $TARGET_DIR
 
-Set-Location $ENV:Temp
-$STAGE = [System.Guid]::NewGuid().ToString()
-New-Item -Type Directory -Name $STAGE
-Set-Location $STAGE
+# Copy the binary file. This is the only actual file we're packaging.
+Copy-Item ".\target\$($Env:TARGET)\release\$($Env:PROJECT_NAME).exe" "$TARGET_DIR\"
 
-$ZIP = "$SRC_DIR\deployment\$($Env:PROJECT_NAME)-$($Env:APPVEYOR_REPO_TAG_NAME)-$($Env:FRIENDLY_TARGET_NAME).zip"
+Push-Location "$TARGET_DIR"
 
-# TODO Update this to package the right artifacts
-Copy-Item "$SRC_DIR\target\$($Env:TARGET)\release\$($Env:PROJECT_NAME).exe" '.\'
-Copy-Item "$SRC_DIR\README.md" '.\'
-Copy-Item "$SRC_DIR\LICENSE" '.\'
+# Create a basic SHASUM file
+(Get-ChildItem -File "." |
+        Get-FileHash -Algorithm SHA256 |
+        Format-Table -Property @{Name='Path';Expression={Resolve-Path -Relative $_.Path}},Hash -AutoSize -HideTableHeaders |
+        Out-String).Trim() | Out-File -Path "./SHA256SUM"
 
-7z a "$ZIP" *
-
-Push-AppveyorArtifact "$ZIP"
-
-Remove-Item *.* -Force
-Set-Location $SRC_DIR
+Pop-Location
